@@ -1,15 +1,25 @@
-use std::net::TcpStream;
+use std::fmt::Result;
+use std::net::{TcpStream, UdpSocket};
+use std::thread::spawn;
 
 use crate::chain_manager::ChainManager;
 use crate::constants::Hash;
 use crate::herrors::HError;
+use crate::message::Message;
 
-pub trait NodeInterface {
+
+pub trait Node {
+    ///this node is a center?
     fn is_center(&self) -> bool;
+
     ///udp connection 
-    fn contest_center(&self, mesg: Message) -> Result<(), HError>;
-    ///upd connection 
-    fn contact_friends(&self, mesg: Message) -> Result<(), HError>;
+    fn udp_listen(&self) -> Result<(), HError>{
+        let socket = UdpSocket::bind(localaddrress).unwrap();
+        let socket_handle = sq    
+    }
+    ///tcp connection
+    fn tcp_listen(&self) -> Result<TcpStream, HError>;
+    
 }
 
 
@@ -32,7 +42,7 @@ pub enum NodeState {
     ///node is active and free to communicate
     Active,
     ///node is active, but busy, it may need some time to deal with other nodes' requests
-    Busy,
+    Busy,                                                            
     ///node is inactive, disconnected from the network, 
     ///the default state of the node after it is created
     Sleepping,
@@ -40,7 +50,7 @@ pub enum NodeState {
 
 
 
-pub struct Node {
+pub struct UserNode {
     ///name of the node
     pub name: Hash,
     ///address of the node
@@ -48,7 +58,7 @@ pub struct Node {
     ///node's birthday
     pub timestamp: u64,
     ///friend nodes, new with a parameter to set the capacity of the friends list
-    pub friends: Vec<Node>,
+    pub friends: Vec<UserNode>,
     ///data center's location
     pub center_address: Option<String>,
     ///chain's manager
