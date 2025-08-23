@@ -1,7 +1,9 @@
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpStream, UdpSocket, TcpListener};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use async_trait::async_trait;
+use tokio::sync::mpsc::{Sender, Receiver};
 
 use crate::chain_manager::ChainManager;
 use crate::constants::{Hash, UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE};
@@ -18,13 +20,13 @@ pub trait Node {
     ///udp connection, receive message from all nodes, return message and source address
     async fn upd_recv_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr), HError> {
         //check  the buffer size
-        if buf.len() < MAX_MSG_SIZE {
+        if buf.len() < MAX_UDP_MSG_SIZE {
             return Err(HError::RingBuf { message: format!("buffer size is too small, need at least {}", MAX_UDP_MSG_SIZE) });
         }
         //bind to udp port for any address
         let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
         //receive data from udp socket
-        let (size, src_addr) = udp_socket.recv_from(buf).await?;
+        let (_, src_addr) = udp_socket.recv_from(buf).await?;
         
         //deserialize data to message
         let msg = Message::decode_from_slice(buf)?;
@@ -32,24 +34,30 @@ pub trait Node {
         Ok((msg, src_addr))
     }
     ///tcp connection
-    async fn tcp_listen(&self) -> Result<TcpStream, HError> {
-        //bind to tcp port for any address
-        let tcp_socket = TcpStream::bind(format!("0.0.0.0:{}", TCP_PORT)).await?;
-        Ok(tcp_socket)
-    }
-    ///send message to another node, use udp
-    async fn send_udp(&self, message: Message) -> Result<(), HError> {
-        let name = message.receiver;
-        let friend_addr = self.get_friend_address(name);
-        if let Some(addr) = friend_addr {
-            let data = bincode::seralize(&message).unwrap();
-            let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
-        } else {
-            return Err(HError::NetWork { message: format!("can't get {}'s address", name) });
-        }
+    async fn tcp_listen(&self) -> Result<Receiver, HError> {
+        //crate mpsc channel for tcp connection
+        let (mut sender, mut reciever ) = 
+            tokio::sync::mpsc::channel(MAX_MSG_SIZE);
         
 
+        let handle = tokio::task::spawn( async move{
+            //bind to tcp port for any address
+            let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_PORT)).await?;
+            loop {
+                //accept tcp connection
+                let mut tcp_stream = tcp_listener.accept().await?.0;
+
+                let mut buf = Vec::with_capacity(MAX_MSG_SIZE);
+                while tcp_stream.read(&mut buf[..]).await? != 0 {
+                    sender.send(& buf).await?;
+                }
+            }
+        }).await??;
+
+        Ok(reciever)
     }
+    //send message to another node, use udp
+   
         
 
     

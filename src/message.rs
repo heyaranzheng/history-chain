@@ -6,7 +6,7 @@ use crate::chain::NomalChain;
 use crate::herrors::HError;
 
 ///A message that can be sent between nodes in the network.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct Message {
     ///message's hash
     pub hash: Hash,
@@ -54,7 +54,10 @@ impl Message {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+unsafe impl Send for Message {}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub enum MessageType {
     ///request for history chain, with a timestamp bigger than the given one
     ChainRequest(u64),
@@ -67,12 +70,14 @@ pub enum MessageType {
     SearchFriend(Hash),
 }
 
+unsafe impl Send for MessageType {}
+
 /// There is no poller's name and timestamp because the first voteblock in the chain is the poller, 
 /// we can get the information from the first block of the chain (not the genesis block, the poller's
 /// block is the second block strictly speaking in the chain).
 /// The result will be a number between 0 and 1, the consensus of the network, ervery block's result
 /// is the result according to the votes of the previous blocks.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct VoteBlock {
     ///expire time of the vote
     pub expire_time: u64,
@@ -90,11 +95,31 @@ pub struct VoteBlock {
     result: f32,
 }
 
+unsafe impl Send for VoteBlock {}
+
 ///block recitification message, the data of the block keeped should be 
 ///recitified by the network.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct BlockReci {
     old_block: Hash,
     new_block: Hash,
 }
 
+
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_and_encode() {
+        let msg = Message::new_with_zero();
+
+        let encoded = msg.encode_to_vec().unwrap();
+        let decoded = Message::decode_from_slice(&encoded).unwrap();
+
+        assert_eq!(msg, decoded);
+    }
+
+
+
+}

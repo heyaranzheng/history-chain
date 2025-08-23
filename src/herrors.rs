@@ -15,7 +15,7 @@ pub enum HError {
     #[error("Join error:{0}\n")]
     Join(#[from] tokio::task::JoinError),
   
-    #[error("Network error:{0}\n")]
+    #[error("Network error:{message}\n")]
     NetWork {message: String },
 
     #[error("ringbuf error: {message}\n")]
