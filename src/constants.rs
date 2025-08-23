@@ -16,6 +16,12 @@ pub const PATH_CACHE_BUNDLE: &str = "cache/bundles";
 // MAX_BUFFER_SIZE in seralize file -----  32KB
 pub const BUFFER_SIZE: usize = 1024 * 32;
 
+//network constants
+pub const UDP_PORT: u16 = 8080;
+pub const TCP_PORT: u16 = 8088;
+pub const MAX_MSG_SIZE: usize = 1024 * 1024; // 1MB
+pub const MAX_UDP_MSG_SIZE: usize= 1024; // 1KB
+
 
 use uuid::Uuid;
 pub trait  Init{

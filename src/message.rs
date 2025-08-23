@@ -1,7 +1,12 @@
-use crate::constants::Hash;
+use bincode::{Decode, Encode};
+use serde::{Deserialize, Serialize};
+
+use crate::constants::{Hash, ZERO_HASH, MAX_MSG_SIZE};
 use crate::chain::NomalChain;
+use crate::herrors::HError;
 
 ///A message that can be sent between nodes in the network.
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct Message {
     ///message's hash
     pub hash: Hash,
@@ -15,6 +20,41 @@ pub struct Message {
     pub receiver: Hash,
 }
 
+impl Message {
+    pub fn new_with_zero() -> Self{
+        Self {
+            hash: ZERO_HASH,
+            sender: ZERO_HASH,
+            timestamp: 0,
+            message_type: MessageType::ChainRequest(0),
+            receiver: ZERO_HASH,  
+        }
+    }
+    pub fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //decode the slice to a message
+        let (msg, _): ( Self, _) = bincode::decode_from_slice(slice, config)
+            .map_err(|_| HError::Message { message: "decode error in message".to_string() })?;
+        Ok(msg)
+    }
+
+    pub fn encode_to_vec(&self) -> Result<Vec<u8>, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //encode the message to a vec
+        let vec = bincode::encode_to_vec(self, config)
+           .map_err(|_| HError::Message { message: "encode error in message".to_string() })?;
+
+        //check the size of the message
+        if vec.len() > MAX_MSG_SIZE {
+            return Err(HError::Message { message: "message too large, It's bigger than UDP_MSG_SIZE".to_string() });
+        }
+        Ok(vec)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub enum MessageType {
     ///request for history chain, with a timestamp bigger than the given one
     ChainRequest(u64),
@@ -32,6 +72,7 @@ pub enum MessageType {
 /// block is the second block strictly speaking in the chain).
 /// The result will be a number between 0 and 1, the consensus of the network, ervery block's result
 /// is the result according to the votes of the previous blocks.
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct VoteBlock {
     ///expire time of the vote
     pub expire_time: u64,
@@ -49,8 +90,11 @@ pub struct VoteBlock {
     result: f32,
 }
 
-///
+///block recitification message, the data of the block keeped should be 
+///recitified by the network.
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode)]
 pub struct BlockReci {
     old_block: Hash,
     new_block: Hash,
 }
+

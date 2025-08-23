@@ -1,24 +1,57 @@
-use std::fmt::Result;
-use std::net::{TcpStream, UdpSocket};
-use std::thread::spawn;
+use tokio::net::{TcpStream, UdpSocket};
+use std::net::SocketAddr;
+use std::pin::Pin;
+use async_trait::async_trait;
 
 use crate::chain_manager::ChainManager;
-use crate::constants::Hash;
+use crate::constants::{Hash, UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE};
 use crate::herrors::HError;
 use crate::message::Message;
 
-
+#[async_trait]
 pub trait Node {
     ///this node is a center?
     fn is_center(&self) -> bool;
+    ///get a friend node's address by its name
+    fn get_friend_address(&self, name: Hash) -> Option<String>;
 
-    ///udp connection 
-    fn udp_listen(&self) -> Result<(), HError>{
-        let socket = UdpSocket::bind(localaddrress).unwrap();
-        let socket_handle = sq    
+    ///udp connection, receive message from all nodes, return message and source address
+    async fn upd_recv_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr), HError> {
+        //check  the buffer size
+        if buf.len() < MAX_MSG_SIZE {
+            return Err(HError::RingBuf { message: format!("buffer size is too small, need at least {}", MAX_UDP_MSG_SIZE) });
+        }
+        //bind to udp port for any address
+        let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
+        //receive data from udp socket
+        let (size, src_addr) = udp_socket.recv_from(buf).await?;
+        
+        //deserialize data to message
+        let msg = Message::decode_from_slice(buf)?;
+
+        Ok((msg, src_addr))
     }
     ///tcp connection
-    fn tcp_listen(&self) -> Result<TcpStream, HError>;
+    async fn tcp_listen(&self) -> Result<TcpStream, HError> {
+        //bind to tcp port for any address
+        let tcp_socket = TcpStream::bind(format!("0.0.0.0:{}", TCP_PORT)).await?;
+        Ok(tcp_socket)
+    }
+    ///send message to another node, use udp
+    async fn send_udp(&self, message: Message) -> Result<(), HError> {
+        let name = message.receiver;
+        let friend_addr = self.get_friend_address(name);
+        if let Some(addr) = friend_addr {
+            let data = bincode::seralize(&message).unwrap();
+            let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
+        } else {
+            return Err(HError::NetWork { message: format!("can't get {}'s address", name) });
+        }
+        
+
+    }
+        
+
     
 }
 
@@ -70,7 +103,7 @@ pub struct UserNode {
 
 }
 
-impl Node {
+impl UserNode {
     pub fn new(name: Hash, capacity: usize) -> Self {
         Self {
             name,
