@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::{Sender, Receiver};
 
 use crate::chain_manager::ChainManager;
-use crate::constants::{Hash, UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE};
+use crate::constants::{Hash, UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
 use crate::message::Message;
 
@@ -34,27 +34,50 @@ pub trait Node {
         Ok((msg, src_addr))
     }
     ///tcp connection
-    async fn tcp_listen(&self) -> Result<Receiver, HError> {
+    async fn tcp_listen(&self) ->
+        (Sender<bool>, Receiver<Vec<u8>>, tokio::task::JoinHandle<Result<(), HError>>) {
         //crate mpsc channel for tcp connection
-        let (mut sender, mut reciever ) = 
+        let (mut sender, mut receiver ) = 
             tokio::sync::mpsc::channel(MAX_MSG_SIZE);
         
+        let (mut closer, mut switcher_receiver) 
+            = tokio::sync::mpsc::channel::<bool>(1);
+        
 
-        let handle = tokio::task::spawn( async move{
+        let handle: tokio::task::JoinHandle<Result<(), HError>> = tokio::task::spawn( async move{
             //bind to tcp port for any address
             let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_PORT)).await?;
             loop {
+                //check if the switcher is closed
+                let signal =switcher_receiver.try_recv();
+                match signal {
+                    Ok(close) => {
+                        //receive a true, close the tcp listener
+                        if close == true  {
+                            break;
+                        }
+                        //not close, continue to accept tcp connection
+                    }
+                    Err(_) => {
+                        //no signal, continue to accept tcp connection
+                    }
+        
+                }
                 //accept tcp connection
                 let mut tcp_stream = tcp_listener.accept().await?.0;
-
-                let mut buf = Vec::with_capacity(MAX_MSG_SIZE);
+                let mut buf = vec![0; MTU_SIZE];
                 while tcp_stream.read(&mut buf[..]).await? != 0 {
-                    sender.send(& buf).await?;
+                    sender.send(buf).await
+                        .map_err(|e| 
+                            HError::Message { message: format!("send error: {}", e) }
+                        )?;
+                    buf = vec![0; MTU_SIZE];
                 }
             }
-        }).await??;
+            Ok(())
+        });
 
-        Ok(reciever)
+        ( closer, receiver, handle ) 
     }
     //send message to another node, use udp
    

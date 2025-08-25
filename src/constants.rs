@@ -21,7 +21,7 @@ pub const UDP_PORT: u16 = 8080;
 pub const TCP_PORT: u16 = 8088;
 pub const MAX_MSG_SIZE: usize = 1024 * 1024; // 1MB
 pub const MAX_UDP_MSG_SIZE: usize= 1024; // 1KB
-
+pub const MTU_SIZE: usize = 1500; // 1500 bytes
 
 use uuid::Uuid;
 pub trait  Init{

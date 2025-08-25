@@ -11,7 +11,8 @@ pub enum HError {
 
     #[error("DB error:{0}\n")]
     Database(#[from] sqlx::Error),
-
+    
+    
     #[error("Join error:{0}\n")]
     Join(#[from] tokio::task::JoinError),
   
