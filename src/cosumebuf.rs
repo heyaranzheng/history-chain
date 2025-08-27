@@ -115,19 +115,16 @@ impl  AsyncWrite for Ringbuf
                 //so every time we write from the beginning of the buffer, not the last write position.
                 let nwrite = vec_buf.capacity().min(buf.len());
                 
-                //This means all the data has been written, we need to notify the reader.
-                if nwrite == 0 {
-                    unsafe {
-                        (*this.buf.inner).state = BufState::WriteFinished;
-                    }
-                    return Poll::Ready(Ok(0));
-                }
                 vec_buf.clear();
                 vec_buf.extend_from_slice(&buf[..nwrite]);
 
-                //wake the reader if it is waiting for data.
                 unsafe {
-                    (*this.buf.inner).state = BufState::Readable;
+                    //if this is the last write, change the state to WriteFinished
+                    if nwrite < vec_buf.capacity() {
+                        (*this.buf.inner).state = BufState::WriteFinished;
+                    }else {
+                        (*this.buf.inner).state = BufState::Readable;
+                    }
                     if let Some(waker) = (*this.buf.inner).r_waker.take() {
                         waker.wake();
                     }
@@ -141,6 +138,12 @@ impl  AsyncWrite for Ringbuf
                 Poll::Pending
             }
             BufState::WriteFinished => {
+                //here, we must wake the reader, because the reader may be waiting for data,
+                unsafe {
+                    if let Some(waker) = (*this.buf.inner).r_waker.take() {
+                        waker.wake();
+                    }
+                }
                 return Poll::Ready(Ok(0));
             }
         }
@@ -168,6 +171,7 @@ impl AsyncRead for Ringbuf {
         match save_state {
             BufState::Readable | BufState::WriteFinished => {
                 let total = vec_buf.len();
+     
                 let nread = total.min(buf.capacity());
                 if nread < total {
                     return Poll::Ready(
@@ -184,6 +188,21 @@ impl AsyncRead for Ringbuf {
 
                 //if we have read all the data, we don't need to notify the writer or store the r_waker.
                 if save_state == BufState::WriteFinished {
+                    //rectify the writer if it is waiting for a wake up.
+                    unsafe{ 
+                        if let Some(waker) = (*this.buf.inner).w_waker.take() {
+                            waker.wake();
+                        }
+                    }
+
+                    //we may have data in the inner's buffer, so if we use a while loop use like this:
+                    // while reader.read(&mut read_buf[..]).await.unwrap() > 0 {
+                    //}
+                    //when the last write is not 0, there are still have data in the inner's buffer, 
+                    //so the tokio::io::ReadBuf will not be empty, the read function will not return 0,
+                    //even the last read has done. This means it will loop forever.
+                    //So, we must clear the inner's buffer after the last read.
+                    vec_buf.clear();
                     return Poll::Ready(Ok(()));
                 }
                 unsafe { 
@@ -212,26 +231,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_ringbuf() {
-        let (mut reader, mut writer) = Ringbuf::new(4);
-        let data = vec![1u8; 21];
+        let (mut reader, mut writer) = Ringbuf::new(10);
+        let data = vec![1u8; 11];
 
         let write_task = async move {
             let mut n = 0;
             while n < data.len() {
                 n += writer.write(&data[n..]).await.unwrap();
             }
+
         };
         let mut read_buf = vec![0u8; 31];
+        let mut total = 0;
+        let mut nread= 0;
+   
         let read_task = async move {
-            while reader.read(&mut read_buf[..]).await.unwrap() > 0 {
-                println!("read data: {:?}", read_buf);
-            }
+            loop {
+                nread = reader.read(&mut read_buf[total..]).await.unwrap();
+                total += nread;
+                if nread == 0 {
+                    println!("data :{:?}", &read_buf[..total]);
+                    break;
+                }
+            };
         };
 
         tokio::join!(write_task, read_task);
-
-
-  
-      
     }    
 }
