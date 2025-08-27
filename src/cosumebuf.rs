@@ -1,7 +1,8 @@
-use tokio::io::{AsyncWrite, AsyncRead};
+use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
 use std::task::{Poll, Context, Waker};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::future::Future;
 
 use crate::herrors::HError;
 
@@ -223,6 +224,136 @@ impl AsyncRead for Ringbuf {
     }
 }
 
+///This is a wrapper of Ringbuf, it is used to provide a producer-consumer pattern.
+pub struct ProducerBuf{
+    ringbuf: Ringbuf,
+}
+
+impl ProducerBuf {
+    pub fn new(ringbuf: Ringbuf) -> Self {
+        Self { ringbuf }
+    }
+    
+    //warpper the method of write_all() as another public method named produce_all
+    pub async fn produce_all(&mut self, data: &[u8]) -> Result<(), HError> {
+        self.ringbuf.write_all(data).await?;
+        Ok(())
+    }
+    //warpper the method of write() as another public method named produce(), return the
+    //number of bytes written.
+    pub async fn produce(&mut self, data: &[u8]) -> Result<usize, HError> {
+        let n = self.ringbuf.write(data).await?;
+        Ok(n)
+    }
+}
+
+
+pub struct ConsumerBuf<T>
+    where T: FnMut(&mut [u8])-> Result<(), HError>,
+        Self: Unpin
+{
+    ringbuf: Ringbuf,
+    task: Option<T>,
+}
+
+
+
+impl <C> ConsumerBuf<C> 
+    where C: FnMut(&mut [u8])-> Result<(), HError>,
+        Self: Unpin
+{
+    pub fn new(capacity: usize, closure: C) -> (ProducerBuf, Self) {
+        let (writer, reader) = Ringbuf::new(capacity);
+        let consumer = Self {
+            ringbuf: reader,
+            task: Some(closure),
+        };
+        let producer = ProducerBuf::new(writer);
+        (producer, consumer)
+    }
+}
+
+impl <T> Future for ConsumerBuf<T> 
+    where T: FnMut(&mut [u8])-> Result<(), HError>,
+        Self: Unpin
+{
+    type Output = Result<(), HError>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let save_state = unsafe {
+            (*this.ringbuf.buf.inner).state.clone()
+        };
+        let  vec_buf = unsafe {
+            &mut (*this.ringbuf.buf.inner).buf
+        };
+        match save_state {
+            BufState::Readable => {
+                //if we have some tast to do, we will do it here.
+                if let Some(task) = &mut this.task {
+                    let result = task(& mut vec_buf[..]);
+                    match result {
+                        Ok(_) => {
+                            unsafe {
+                                (*this.ringbuf.buf.inner).state = BufState::Writable;
+                                if let Some(waker) = (*this.ringbuf.buf.inner).w_waker.take() {
+                                    waker.wake();
+                                }
+                            }
+                            return Poll::Ready(Ok(()));
+                        }
+                        Err(_) => {
+                            return Poll::Ready(
+                                Err(
+                                    HError::Message { message: "error in consumer closure".to_string() }
+                                )
+                            );
+                        }
+                    }
+                }
+                //the closure is None, so we just return Ready(Ok(()))
+                unsafe {
+                    (*this.ringbuf.buf.inner).state = BufState::Writable;
+                    if let Some(waker) = (*this.ringbuf.buf.inner).w_waker.take() {
+                        waker.wake();
+                    }
+                }
+                return Poll::Ready(Ok(()));
+            }
+
+            //the action of this state is almost like the state of Readable, but we don't need
+            //to change the state and notify the writer.
+            BufState::WriteFinished => {
+                //if we have some tast to do, we will do it here.
+                if let Some(closure) = & mut this.task {
+                    let result =closure(& mut vec_buf[..]);
+                    match result {
+                        Ok(_) => {
+                            return Poll::Ready(Ok(()));
+                        }
+                        Err(_) => {
+                            return Poll::Ready(
+                                Err(
+                                    HError::Message { message: "error in consumer closure".to_string() }
+                                )
+                            );
+                        }
+                    }
+                }
+                //the closure is None, so we just return Ready(Ok(()))
+                return Poll::Ready(Ok(()));
+            }
+            //during this state, we can't do anything, so we just return Pending.
+            BufState::Writable => {
+                unsafe {
+                    (*this.ringbuf.buf.inner).r_waker = Some(cx.waker().clone());
+                }
+                return Poll::Pending;
+            }
+        }
+    }
+}
+
 
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -258,4 +389,22 @@ mod tests {
 
         tokio::join!(write_task, read_task);
     }    
+     
+    #[tokio::test]
+    async fn test_ringbuf_write_all() {
+        let (mut reader, mut writer) = Ringbuf::new(10);
+        let data = vec![1u8; 11];
+
+        let write_task = async move {
+            writer.write_all(&data).await.unwrap();
+        };
+        let mut read_buf = vec![0u8; 31];
+        let read_task = async move {
+            while reader.read(&mut read_buf[..]).await.unwrap() > 0 {
+            println!("data :{:?}", &read_buf);
+            }
+        };
+
+        tokio::join!(write_task,read_task);
+    }
 }
