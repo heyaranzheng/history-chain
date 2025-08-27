@@ -13,7 +13,7 @@ struct Inner {
     buf: Vec<u8>,
     state: BufState,
     //this counter is to record the number of references to the this inner,
-    //The drop will execute only when the counter is 1,
+    //The drop will exactly execute only when the counter is 1,
     //The default value is 1, and it will be incresed when the Inner is cloned.
     counter: AtomicUsize,
     w_waker: Option<Waker>,
@@ -245,6 +245,10 @@ impl ProducerBuf {
         let n = self.ringbuf.write(data).await?;
         Ok(n)
     }
+    ///return the capacity of the inner buffer
+    pub fn capacity(&self) -> usize {
+        unsafe {(*self.ringbuf.buf.inner).buf.capacity() }
+    }
 }
 
 
@@ -262,7 +266,23 @@ impl <C> ConsumerBuf<C>
     where C: FnMut(&mut [u8])-> Result<(), HError>,
         Self: Unpin
 {
-    pub fn new(capacity: usize, closure: C) -> (ProducerBuf, Self) {
+    pub fn new(capacity: usize) -> (ProducerBuf, Self) {
+        let (writer, reader) = Ringbuf::new(capacity);
+        let consumer = Self {
+            ringbuf: reader,
+            task: None,
+        };
+        let producer = ProducerBuf::new(writer);
+        (producer, consumer)
+    }
+    ///change the task or add a new task to the consumer.
+    #[inline]
+    pub fn task(&mut self, task: C) -> &mut Self {
+        self.task = Some(task);
+        self
+    }
+
+    pub fn with_closure(capacity: usize, closure: C) -> (ProducerBuf, Self) {
         let (writer, reader) = Ringbuf::new(capacity);
         let consumer = Self {
             ringbuf: reader,
@@ -271,14 +291,60 @@ impl <C> ConsumerBuf<C>
         let producer = ProducerBuf::new(writer);
         (producer, consumer)
     }
+    
+    ///return the capacity of the inner buffer
+    pub fn capacity(&self) -> usize {
+        unsafe {(*self.ringbuf.buf.inner).buf.capacity() }
+    }
+    
+    ///just use the data once, and return the number of bytes consumed.
+    ///Note: 
+    ///     There is a risk to casue a deadlock if the  producer write more than one time.
+    ///     If'd better touse consume() and produce() at the same time, or consume_all() and
+    ///     produce_all() instead. 
+    pub async fn consume(&mut self) -> Result<usize, HError> {
+        let pinned_consumer = Pin::new(self);
+        let n = pinned_consumer.await?;
+        Ok(n)
+    }
+
+    ///consume all the data in from the producer and return the number of bytes consumed.
+    ///Note: 
+    ///     There is a risk to casue a deadlock if the  producer write more than one time.
+    ///     If'd better touse consume() and produce() at the same time, or consume_all() and
+    ///     produce_all() instead.
+    pub async fn consume_all(&mut self) -> Result<usize, HError> {
+        let mut total = 0;
+        let capacity = self.capacity();
+        loop {
+            let pinned_consumer = Pin::new(&mut (*self));
+            let n = pinned_consumer.await?;
+            total += n;
+            if n == 0 || n < capacity {
+                break;
+            }
+        }
+        Ok(total)
+    }
 }
 
+///The Future wrapper a number of bytes consumed by the closure. 
+///Note: 
+///     We CAN NOT use the number of bytes "0" ,which is wrapped in this Future, to 
+///     judge whether all the data is consumed derectly. because the last write may not be "0".
+///     The condition to judge whether all the data is consumed may such like this:
+///     loop {
+///         let pinned_consumer = Pin::new(&mut consumer);
+///         let n = pinned_consumer.await.unwrap();
+///         if n == 0 || n < consumer.capacity() {
+///             break;
+///         }
+///      }
 impl <T> Future for ConsumerBuf<T> 
     where T: FnMut(&mut [u8])-> Result<(), HError>,
         Self: Unpin
 {
-    type Output = Result<(), HError>;
-
+    type Output = Result<usize, HError>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let save_state = unsafe {
@@ -294,13 +360,15 @@ impl <T> Future for ConsumerBuf<T>
                     let result = task(& mut vec_buf[..]);
                     match result {
                         Ok(_) => {
+                            //caculate the number of bytes we can use.
+                            let nread = vec_buf.len();
                             unsafe {
                                 (*this.ringbuf.buf.inner).state = BufState::Writable;
                                 if let Some(waker) = (*this.ringbuf.buf.inner).w_waker.take() {
                                     waker.wake();
                                 }
                             }
-                            return Poll::Ready(Ok(()));
+                            return Poll::Ready(Ok(nread));
                         }
                         Err(_) => {
                             return Poll::Ready(
@@ -318,7 +386,7 @@ impl <T> Future for ConsumerBuf<T>
                         waker.wake();
                     }
                 }
-                return Poll::Ready(Ok(()));
+                return Poll::Ready(Ok(0));
             }
 
             //the action of this state is almost like the state of Readable, but we don't need
@@ -329,7 +397,7 @@ impl <T> Future for ConsumerBuf<T>
                     let result =closure(& mut vec_buf[..]);
                     match result {
                         Ok(_) => {
-                            return Poll::Ready(Ok(()));
+                            return Poll::Ready(Ok(vec_buf.len()));
                         }
                         Err(_) => {
                             return Poll::Ready(
@@ -341,7 +409,7 @@ impl <T> Future for ConsumerBuf<T>
                     }
                 }
                 //the closure is None, so we just return Ready(Ok(()))
-                return Poll::Ready(Ok(()));
+                return Poll::Ready(Ok(0));
             }
             //during this state, we can't do anything, so we just return Pending.
             BufState::Writable => {
@@ -407,4 +475,51 @@ mod tests {
 
         tokio::join!(write_task,read_task);
     }
+
+    #[tokio::test]
+    async fn test_producer_consumer() {
+        let (mut producer, mut consumer) = ConsumerBuf::with_closure(10, |data: &mut [u8]| {
+            println!("data in consumer: {:?}", data);
+            Ok(())
+        });
+        let data = vec![1u8; 11];
+
+        let produce_task = async move {
+            producer.produce_all(&data).await.unwrap();
+        };
+
+        let capacity = unsafe {(*consumer.ringbuf.buf.inner).buf.capacity()};
+        let consume_task = async move {
+            loop {
+                let pinned_consumer = Pin::new(&mut consumer);
+                let n = pinned_consumer.await.unwrap();
+                if n == 0 || n < capacity {
+                    break;
+                }
+            }
+
+        };
+
+        tokio::join!(produce_task, consume_task);
+    }
+
+    ///test all the basic functions of the consumer and producer.
+    #[tokio::test]
+    async fn test_producer_consumer_all() {
+        let (mut producer, mut consumer) = ConsumerBuf::new(10);
+        let data = vec![1u8; 11];
+        let task = |data: &mut [u8]| {
+            println!("data in consumer: {:?}", data);
+            Ok(())   
+        };
+        let produce_task = async move {
+            producer.produce_all(&data).await.unwrap();
+        };
+        let cosumer_task = async move {
+            consumer.task(task).consume_all().await.unwrap();
+        };
+        tokio::join!(produce_task, cosumer_task);
+    }
+
+
 }
