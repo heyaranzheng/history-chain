@@ -121,7 +121,31 @@ impl  AsyncWrite for Ringbuf
 
                 unsafe {
                     //if this is the last write, change the state to WriteFinished
-                    if nwrite < vec_buf.capacity() {
+                    //NOTE: 
+                    //   We can't leave a 0 byte for the next write, because when we use 
+                    //   while n < data.len() {
+                    //       n += writer.write(&data[n..]).await?;
+                    //   }
+                    // we can't return 0, the reader will wait forever.
+                    // The state WriteFinished only can be setted in the write function.
+                    // For example, data.len() == 10, writer's buffer size is 10 too,
+                    // The timelines in  this loop are:
+                    //      1. writer write 10 bytes to the buffer, state changed to readable,
+                    //      2. wake the reader, reader read 10 bytes, state changed to writable,
+                    //      and reader wait for another write, or it will be blocked forever.!!!!
+                    //      3. n = 10, that means it will out of the while loop. 
+                    // That means we can't change the state to WriteFinished and wake the 
+                    // sleeping reader anymore. unless we add another 0 write at the end of the 
+                    // loop to change the state like this:
+                    //       while n < data.len() {
+                    //           n += writer.write(&data[n..]).await?;
+                    //       }
+                    //       writer.write(&[]).await?;
+                    // But this will make the code more complex.
+                    // So we just do a more check here: nwrite == buf.len(), to check if
+                    // We can write down all the data at this time. If so, we can change the state 
+                    //to WriteFinished.
+                    if  nwrite == buf.len() {
                         (*this.buf.inner).state = BufState::WriteFinished;
                     }else {
                         (*this.buf.inner).state = BufState::Readable;
@@ -261,7 +285,6 @@ pub struct ConsumerBuf<T>
 }
 
 
-
 impl <C> ConsumerBuf<C> 
     where C: FnMut(&mut [u8])-> Result<(), HError>,
         Self: Unpin
@@ -320,7 +343,14 @@ impl <C> ConsumerBuf<C>
             let pinned_consumer = Pin::new(&mut (*self));
             let n = pinned_consumer.await?;
             total += n;
-            if n == 0 || n < capacity {
+
+            //This is safe to use state to judge whether all the data is consumed, because we 
+            //have only two tasks at the same time, and this one is waiting for the data.
+            //It will block at  await point, unless the data is ready to consume. So, we don't
+            //need to worry about the state changed to WriteFinished when we don't read all 
+            //the data.
+            let state = unsafe { (*self.ringbuf.buf.inner).state.clone() };
+            if state == BufState::WriteFinished { 
                 break;
             }
         }
@@ -431,7 +461,7 @@ mod tests {
     #[tokio::test]
     async fn test_ringbuf() {
         let (mut reader, mut writer) = Ringbuf::new(10);
-        let data = vec![1u8; 11];
+        let data = vec![1u8; 10];
 
         let write_task = async move {
             let mut n = 0;
@@ -440,7 +470,7 @@ mod tests {
             }
 
         };
-        let mut read_buf = vec![0u8; 31];
+        let mut read_buf = vec![0u8; 10];
         let mut total = 0;
         let mut nread= 0;
    
@@ -461,12 +491,12 @@ mod tests {
     #[tokio::test]
     async fn test_ringbuf_write_all() {
         let (mut reader, mut writer) = Ringbuf::new(10);
-        let data = vec![1u8; 11];
+        let data = vec![1u8; 10];
 
         let write_task = async move {
             writer.write_all(&data).await.unwrap();
         };
-        let mut read_buf = vec![0u8; 31];
+        let mut read_buf = vec![0u8; 10];
         let read_task = async move {
             while reader.read(&mut read_buf[..]).await.unwrap() > 0 {
             println!("data :{:?}", &read_buf);
@@ -478,22 +508,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_producer_consumer() {
-        let (mut producer, mut consumer) = ConsumerBuf::with_closure(10, |data: &mut [u8]| {
-            println!("data in consumer: {:?}", data);
-            Ok(())
+        let (mut producer, mut consumer) = 
+            ConsumerBuf::with_closure(10, |data: &mut [u8]| {
+                println!("data in consumer: {:?}", data);
+                Ok(())
         });
-        let data = vec![1u8; 11];
+        let data = vec![1u8; 10];
 
         let produce_task = async move {
             producer.produce_all(&data).await.unwrap();
         };
 
-        let capacity = unsafe {(*consumer.ringbuf.buf.inner).buf.capacity()};
+        let capacity = consumer.capacity();
         let consume_task = async move {
             loop {
                 let pinned_consumer = Pin::new(&mut consumer);
-                let n = pinned_consumer.await.unwrap();
-                if n == 0 || n < capacity {
+                let _ = pinned_consumer.await.unwrap();
+                //This is safe, because we have only two tasks, and this one is waiting for the data.
+                //It will block here unless the data is ready to consume. So, we don't need to worry 
+                //about the state changed to WriteFinished when we don't read all the data.
+                let state = unsafe { (*consumer.ringbuf.buf.inner).state.clone() };
+                if state == BufState::WriteFinished {
                     break;
                 }
             }
@@ -509,8 +544,9 @@ mod tests {
         //This is a real  example of using the producer and consumer. It will produce 10 pieces of data, 
         //and then consume them.
         //create a producer and a consumer, and set the task of the consumer to print the data.
-        let (mut producer, mut consumer) = ConsumerBuf::new(10);
-        let data = vec![1u8; 11];
+        let (mut producer, mut consumer) = 
+            ConsumerBuf::new(10);
+        let data = vec![1u8; 20];
         let task = |data: &mut [u8]| {
             println!("data in consumer: {:?}", data);
             Ok(())   
@@ -525,11 +561,11 @@ mod tests {
         //run the tasks.
         tokio::join!(produce_task, cosumer_task);
     }
-
+    //this test will waste a lot of time, just mask it.
     #[tokio::test]
     async fn test_throughput() {
-        //create a fake data source , 1 GB;
-        let data_size =   1024 * 1024 * 600 + 1;
+        //create a fake data source , 600 MB;
+        let data_size =   1024 * 1024 * 600 ;
         let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
         
         //start the timer.
@@ -561,7 +597,7 @@ mod tests {
         println!("Throughput: {:.2} MB/s",
             data_size as f64 / (1024.0 * 1024.0) / duration.as_secs_f64());
          //create a fake data source , 600MB;
-        let data_size =   1024 * 1024 * 600 + 1;
+        let data_size =   1024 * 1024 * 600 ;
         let data: Vec<u8> = (0..data_size).map(|i| (i % 256) as u8).collect();
         
         let start_cmp = std::time::Instant::now();
