@@ -68,7 +68,8 @@ struct Ringbuf{
 
 impl  Ringbuf
 {
-    pub fn new(capacity: usize) -> (Self, Self) {
+    //crate a new Ringbuf with the given capacity, return a tuple of (writer, reader)
+    fn new(capacity: usize) -> (Self, Self) {
         let inner = Inner::new(capacity);
 
         let writer =Self {
@@ -78,6 +79,60 @@ impl  Ringbuf
         let reader = writer.clone();
         (writer, reader)
     }
+    //return  the inner buffer as a mutable reference of vector<u8>
+    #[inline]
+    fn get_mut_vec_buf(&mut self) -> &mut Vec<u8> {
+        unsafe {
+            &mut (*self.buf.inner).buf
+        }
+    }
+    //clone the inner buffer's state, return a BufState
+    #[inline]
+    fn clone_buf_state(&self) -> BufState {
+        unsafe {
+            (*self.buf.inner).state.clone()
+        }
+    }
+    //set the inner buffer's state
+    #[inline]
+    fn set_buf_state(&mut self, state: BufState) {
+        unsafe {
+            (*self.buf.inner).state = state;
+        }
+    }
+    //wake the writer
+    #[inline]
+    fn wake_writer(&mut self) {
+        unsafe {
+            if let Some(waker) = (*self.buf.inner).w_waker.take() {
+                waker.wake();
+            }
+        }
+    }
+    //wake the reader
+    fn wake_reader(&mut self) {
+        unsafe {
+            if let Some(waker) = (*self.buf.inner).r_waker.take() {
+                waker.wake();
+            }
+        }
+    }
+    //save writer's waker
+    #[inline]
+    fn writer_waker_save(&mut self, writer_waker: Waker) {
+        unsafe {
+            (*self.buf.inner).w_waker = Some(writer_waker);
+        }
+    }
+    //save reader's waker
+    #[inline]
+    fn reader_waker_save(&mut self, reader_waker: Waker) {
+        unsafe {
+            (*self.buf.inner).r_waker = Some(reader_waker);
+        }
+    }
+
+
 }
 
 //we will clone the Ringbuf if we use it in multiple tasks, so we will have serveral pointers pointed to 
@@ -105,70 +160,59 @@ impl  AsyncWrite for Ringbuf
             buf: &[u8],
         ) -> Poll<Result<usize, std::io::Error>> {
         let this = self.get_mut();
-        let save_state = unsafe { (*this.buf.inner).state.clone() } ;
-        let  vec_buf = unsafe {
-            &mut (*this.buf.inner).buf
-        };
+        let save_state = this.clone_buf_state();
+        let  vec_buf = this.get_mut_vec_buf();
         match save_state {
             BufState::Writable => {
                 //caculate the number of bytes we can write.
-                //because we can only read after a write, and can only write after all data is read,
+                //because we can only read after a write, and can only write after last writen data is read,
                 //so every time we write from the beginning of the buffer, not the last write position.
                 let nwrite = vec_buf.capacity().min(buf.len());
                 
                 vec_buf.clear();
                 vec_buf.extend_from_slice(&buf[..nwrite]);
 
-                unsafe {
-                    //if this is the last write, change the state to WriteFinished
-                    //NOTE: 
-                    //   We can't leave a 0 byte for the next write, because when we use 
-                    //   while n < data.len() {
-                    //       n += writer.write(&data[n..]).await?;
-                    //   }
-                    // we can't return 0, the reader will wait forever.
-                    // The state WriteFinished only can be setted in the write function.
-                    // For example, data.len() == 10, writer's buffer size is 10 too,
-                    // The timelines in  this loop are:
-                    //      1. writer write 10 bytes to the buffer, state changed to readable,
-                    //      2. wake the reader, reader read 10 bytes, state changed to writable,
-                    //      and reader wait for another write, or it will be blocked forever.!!!!
-                    //      3. n = 10, that means it will out of the while loop. 
-                    // That means we can't change the state to WriteFinished and wake the 
-                    // sleeping reader anymore. unless we add another 0 write at the end of the 
-                    // loop to change the state like this:
-                    //       while n < data.len() {
-                    //           n += writer.write(&data[n..]).await?;
-                    //       }
-                    //       writer.write(&[]).await?;
-                    // But this will make the code more complex.
-                    // So we just do a more check here: nwrite == buf.len(), to check if
-                    // We can write down all the data at this time. If so, we can change the state 
-                    //to WriteFinished.
-                    if  nwrite == buf.len() {
-                        (*this.buf.inner).state = BufState::WriteFinished;
-                    }else {
-                        (*this.buf.inner).state = BufState::Readable;
-                    }
-                    if let Some(waker) = (*this.buf.inner).r_waker.take() {
-                        waker.wake();
-                    }
+            
+                //if this is the last write, change the state to WriteFinished
+                //NOTE: 
+                //   We can't leave a 0 byte for the next write, because when we use 
+                //   while n < data.len() {
+                //       n += writer.write(&data[n..]).await?;
+                //   }
+                // we can't return 0, the reader will wait forever.
+                // The state WriteFinished only can be setted in the write function.
+                // For example, data.len() == 10, writer's buffer size is 10 too,
+                // The timelines in  this loop are:
+                //      1. writer write 10 bytes to the buffer, state changed to readable,
+                //      2. wake the reader, reader read 10 bytes, state changed to writable,
+                //      and reader wait for another write, or it will be blocked forever.!!!!
+                //      3. n = 10, that means it will out of the while loop. 
+                // That means we can't change the state to WriteFinished and wake the 
+                // sleeping reader anymore. unless we add another 0 write at the end of the 
+                // loop to change the state like this:
+                //       while n < data.len() {
+                //           n += writer.write(&data[n..]).await?;
+                //       }
+                //       writer.write(&[]).await?;
+                // But this will make the code more complex.
+                // So we just do a more check here: nwrite == buf.len(), to check if
+                // We can write down all the data at this time. If so, we can change the state 
+                //to WriteFinished.
+                if  nwrite == buf.len() {
+                    this.set_buf_state(BufState::WriteFinished);
+                }else {
+                    this.set_buf_state(BufState::Readable);
                 }
+                this.wake_reader();
                 return Poll::Ready(Ok(nwrite));
             }
             BufState::Readable => {
-                unsafe {
-                    (*this.buf.inner).w_waker = Some(cx.waker().clone());
-                }
+                this.writer_waker_save(cx.waker().clone());
                 Poll::Pending
             }
             BufState::WriteFinished => {
                 //here, we must wake the reader, because the reader may be waiting for data,
-                unsafe {
-                    if let Some(waker) = (*this.buf.inner).r_waker.take() {
-                        waker.wake();
-                    }
-                }
+                this.wake_reader();
                 return Poll::Ready(Ok(0));
             }
         }
@@ -189,14 +233,13 @@ impl AsyncRead for Ringbuf {
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> Poll<std::io::Result<()>> {
         let this = self.get_mut();
-        let save_state = unsafe { (*this.buf.inner).state.clone() } ;
-        let  vec_buf = unsafe {
-            &mut (*this.buf.inner).buf
-        };
+        let save_state = this.clone_buf_state();
+        let  vec_buf = this.get_mut_vec_buf();
+        
         match save_state {
             BufState::Readable | BufState::WriteFinished => {
+                //check if the reader can read all the data.
                 let total = vec_buf.len();
-     
                 let nread = total.min(buf.capacity());
                 if nread < total {
                     return Poll::Ready(
@@ -209,16 +252,11 @@ impl AsyncRead for Ringbuf {
                         )
                     );
                 }
+                //copy the data to the reader's buffer.
                 buf.put_slice(&vec_buf[..nread]);
 
                 //if we have read all the data, we don't need to notify the writer or store the r_waker.
                 if save_state == BufState::WriteFinished {
-                    //rectify the writer if it is waiting for a wake up.
-                    unsafe{ 
-                        if let Some(waker) = (*this.buf.inner).w_waker.take() {
-                            waker.wake();
-                        }
-                    }
 
                     //we may have data in the inner's buffer, so if we use a while loop use like this:
                     // while reader.read(&mut read_buf[..]).await.unwrap() > 0 {
@@ -228,20 +266,21 @@ impl AsyncRead for Ringbuf {
                     //even the last read has done. This means it will loop forever.
                     //So, we must clear the inner's buffer after the last read.
                     vec_buf.clear();
+
+                    //rectify the writer if it is waiting for a wake up.
+                    this.wake_writer();
                     return Poll::Ready(Ok(()));
                 }
-                unsafe { 
-                    (*this.buf.inner).state = BufState::Writable;
-                    if let Some(waker) = (*this.buf.inner).w_waker.take() {
-                        waker.wake();
-                    }
-                }
+
+                //change  the state to Writable, and wake the writer.
+                this.set_buf_state(BufState::Writable);
+                this.wake_writer();
+
                 return Poll::Ready(Ok(()));
             }
             BufState::Writable => {
-                unsafe {
-                    (*this.buf.inner).r_waker = Some(cx.waker().clone());
-                }
+                this.reader_waker_save(cx.waker().clone());
+                
                 return Poll::Pending;
             }
         }
@@ -319,6 +358,36 @@ impl <C> ConsumerBuf<C>
     pub fn capacity(&self) -> usize {
         unsafe {(*self.ringbuf.buf.inner).buf.capacity() }
     }
+
+    //return the mutable reference of the inner buffer
+    #[inline]
+    fn get_mut_vec_buf(&mut self) -> &mut Vec<u8> {
+        self.ringbuf.get_mut_vec_buf()
+    }
+
+    //return the state of the inner buffer
+    #[inline]
+    fn clone_buf_state(&self) -> BufState {
+        self.ringbuf.clone_buf_state()
+    }
+
+    //set the state of the inner buffer
+    #[inline]
+    fn set_buf_state(&mut self, state: BufState) {
+        self.ringbuf.set_buf_state(state)
+    }
+
+    //wake the writer
+    #[inline]
+    fn wake_writer(&mut self) {
+        self.ringbuf.wake_writer()
+    }
+
+    //save reader's waker
+    #[inline]
+    fn reader_waker_save(&mut self, reader_waker: Waker) {
+        self.ringbuf.reader_waker_save(reader_waker)
+    }
     
     ///just use the data once, and return the number of bytes consumed.
     ///Note: 
@@ -349,7 +418,7 @@ impl <C> ConsumerBuf<C>
             //It will block at  await point, unless the data is ready to consume. So, we don't
             //need to worry about the state changed to WriteFinished when we don't read all 
             //the data.
-            let state = unsafe { (*self.ringbuf.buf.inner).state.clone() };
+            let state = self.clone_buf_state();
             if state == BufState::WriteFinished { 
                 break;
             }
@@ -361,15 +430,8 @@ impl <C> ConsumerBuf<C>
 ///The Future wrapper a number of bytes consumed by the closure. 
 ///Note: 
 ///     We CAN NOT use the number of bytes "0" ,which is wrapped in this Future, to 
-///     judge whether all the data is consumed derectly. because the last write may not be "0".
-///     The condition to judge whether all the data is consumed may such like this:
-///     loop {
-///         let pinned_consumer = Pin::new(&mut consumer);
-///         let n = pinned_consumer.await.unwrap();
-///         if n == 0 || n < consumer.capacity() {
-///             break;
-///         }
-///      }
+///     judge whether all the data is consumed derectly. Unless that the first write is 0 byte, there
+///     is no way to get a 0 byte from this wrapper Future.
 impl <T> Future for ConsumerBuf<T> 
     where T: FnMut(&mut [u8])-> Result<(), HError>,
         Self: Unpin
@@ -377,9 +439,8 @@ impl <T> Future for ConsumerBuf<T>
     type Output = Result<usize, HError>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        let save_state = unsafe {
-            (*this.ringbuf.buf.inner).state.clone()
-        };
+        let save_state = this.clone_buf_state();
+       
         let  vec_buf = unsafe {
             &mut (*this.ringbuf.buf.inner).buf
         };
@@ -392,12 +453,9 @@ impl <T> Future for ConsumerBuf<T>
                         Ok(_) => {
                             //caculate the number of bytes we can use.
                             let nread = vec_buf.len();
-                            unsafe {
-                                (*this.ringbuf.buf.inner).state = BufState::Writable;
-                                if let Some(waker) = (*this.ringbuf.buf.inner).w_waker.take() {
-                                    waker.wake();
-                                }
-                            }
+                            this.set_buf_state(BufState::Writable);
+                            this.wake_writer();
+                           
                             return Poll::Ready(Ok(nread));
                         }
                         Err(_) => {
@@ -410,12 +468,9 @@ impl <T> Future for ConsumerBuf<T>
                     }
                 }
                 //the closure is None, so we just return Ready(Ok(()))
-                unsafe {
-                    (*this.ringbuf.buf.inner).state = BufState::Writable;
-                    if let Some(waker) = (*this.ringbuf.buf.inner).w_waker.take() {
-                        waker.wake();
-                    }
-                }
+                this.set_buf_state(BufState::Writable);
+                this.wake_writer();
+               
                 return Poll::Ready(Ok(0));
             }
 
@@ -443,9 +498,8 @@ impl <T> Future for ConsumerBuf<T>
             }
             //during this state, we can't do anything, so we just return Pending.
             BufState::Writable => {
-                unsafe {
-                    (*this.ringbuf.buf.inner).r_waker = Some(cx.waker().clone());
-                }
+                this.reader_waker_save(cx.waker().clone());
+               
                 return Poll::Pending;
             }
         }
@@ -461,7 +515,7 @@ mod tests {
     #[tokio::test]
     async fn test_ringbuf() {
         let (mut reader, mut writer) = Ringbuf::new(10);
-        let data = vec![1u8; 10];
+        let data = vec![1u8; 21];
 
         let write_task = async move {
             let mut n = 0;
@@ -470,7 +524,7 @@ mod tests {
             }
 
         };
-        let mut read_buf = vec![0u8; 10];
+        let mut read_buf = vec![0u8; 30];
         let mut total = 0;
         let mut nread= 0;
    
@@ -491,7 +545,7 @@ mod tests {
     #[tokio::test]
     async fn test_ringbuf_write_all() {
         let (mut reader, mut writer) = Ringbuf::new(10);
-        let data = vec![1u8; 10];
+        let data = vec![1u8; 20];
 
         let write_task = async move {
             writer.write_all(&data).await.unwrap();
@@ -513,7 +567,7 @@ mod tests {
                 println!("data in consumer: {:?}", data);
                 Ok(())
         });
-        let data = vec![1u8; 10];
+        let data = vec![1u8; 11];
 
         let produce_task = async move {
             producer.produce_all(&data).await.unwrap();
@@ -562,7 +616,7 @@ mod tests {
         tokio::join!(produce_task, cosumer_task);
     }
     //this test will waste a lot of time, just mask it.
-    #[tokio::test]
+    //#[tokio::test]
     async fn test_throughput() {
         //create a fake data source , 600 MB;
         let data_size =   1024 * 1024 * 600 ;
