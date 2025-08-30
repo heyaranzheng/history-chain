@@ -1,6 +1,7 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket, TcpListener};
 use std::net::SocketAddr;
+use std::collections::HashMap;
 use std::pin::Pin;
 use async_trait::async_trait;
 use tokio::sync::mpsc::{Sender, Receiver};
@@ -122,8 +123,7 @@ pub struct UserNode {
     ///node's birthday
     pub timestamp: u64,
     ///friend nodes, new with a parameter to set the capacity of the friends list
-    pub friends: Vec<UserNode>,
-    ///data center's location
+    pub friends:Vec<UserNode>,
     pub center_address: Option<String>,
     ///chain's manager
     pub chain_manager: Option<ChainManager>,
@@ -148,7 +148,28 @@ impl UserNode {
         }
     }
 }
+/* 
+#[async_trait]
+impl Node for UserNode {
+    fn is_center(&self) -> bool {
+        false
+    }
+    
+    //find a friend node's address by its name, return None if not found
+    fn get_friend_address(&self, name: Hash) -> Option<String> {
+        self.friends.iter().find(|f| f.name == name)
+            .map(|f| f.address.clone())
+    }
+    
+}
+    */
 
 
+mod tests {
+    use super::*;
 
+    #[tokio::test]
+    async fn test_udp() {
+    }
+}
 

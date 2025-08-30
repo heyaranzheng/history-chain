@@ -6,4 +6,5 @@ mod chain_manager;
 mod constants;
 mod message;
 mod chain;
-mod cosumebuf;
+mod fpsc;
+mod hash;
