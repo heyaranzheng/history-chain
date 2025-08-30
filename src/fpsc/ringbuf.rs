@@ -133,6 +133,12 @@ impl  Ringbuf
             (*self.buf.inner).buf.capacity()
         }
     }
+    #[inline]
+    pub fn len(&self) -> usize {
+        unsafe {
+            (*self.buf.inner).buf.len()
+        }
+    }
     ///clear the inner's buffer, and change the state to Writable.
     #[inline]
     pub fn reuse(&mut self) {

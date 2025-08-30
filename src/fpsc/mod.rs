@@ -8,7 +8,7 @@ use crate::fpsc::producer_cosumer::{ ConsumerBuf, ProducerBuf};
 use crate::fpsc::ringbuf::Ringbuf;
 
 
-pub fn new <C>(capacity: usize) -> (ProducerBuf, ConsumerBuf<C>) 
+pub fn new <C>(capacity: usize) -> (ProducerBuf, ConsumerBuf<C>)
     where C: FnMut(&mut [u8])-> Result<(), HError> + Unpin,
 {
     let (writer, reader) = Ringbuf::new(capacity);
@@ -18,8 +18,8 @@ pub fn new <C>(capacity: usize) -> (ProducerBuf, ConsumerBuf<C>)
 }
 
 ///reset the buffer, so we can reuse the consumer and producer.
-///We can't change the capacity of the buffer, if you want a new capacity
-///just create a new one with fpsc::new().
+///We can't change the capacity of the buffer, if you want a new capacity of it,
+///just create a new pair with fpsc::new().
 #[inline]
 pub fn reuse_buf_from_consumer<C> (consumer: &mut ConsumerBuf<C>)
     where C: FnMut(&mut [u8])-> Result<(), HError> + Unpin,
@@ -27,7 +27,8 @@ pub fn reuse_buf_from_consumer<C> (consumer: &mut ConsumerBuf<C>)
     consumer.ringbuf.reuse();
 }
 #[inline]
-pub fn produce_to_producer(producer: &mut ProducerBuf) {
+pub fn produce_to_producer(producer: &mut ProducerBuf) 
+{
     producer.ringbuf.reuse();
 }
 

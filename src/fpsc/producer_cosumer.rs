@@ -2,6 +2,7 @@ use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
 use std::task::{Poll, Context, Waker};
 use std::pin::Pin;
 use std::future::Future;
+use tokio::io::ReadBuf;
 
 
 use crate::herrors::HError;
@@ -9,15 +10,16 @@ use crate::fpsc::ringbuf::Ringbuf;
 use crate::fpsc::ringbuf::BufState;
 
 ///This is a wrapper of Ringbuf, it is used to provide a producer-consumer pattern.
-pub struct ProducerBuf 
+pub struct ProducerBuf
 {
     pub ringbuf: Ringbuf,
+    stream: Option<Box<dyn AsyncRead + Unpin>>,
 }
 
-impl   ProducerBuf 
+impl ProducerBuf 
 {
     pub fn new(ringbuf: Ringbuf) -> Self {
-        Self { ringbuf, }
+        Self { ringbuf, stream: None}
     }
     
     //warpper the method of write_all() as another public method named produce_all
@@ -47,13 +49,76 @@ impl   ProducerBuf
     }   
     
 }
-/* 
-impl<T> Future for ProducerBuf<T> 
-    where T: AsyncRead + Unpin
+
+impl Future for ProducerBuf
 {
     type Output = Result<usize, HError>;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let vec_buf = self.ringbuf.get_mut_vec_buf();
+
+        //create a ReadBuf from the inner buffer
+        let mut read_buf = ReadBuf::new(&mut vec_buf[..]);
+        let this = self.get_mut();
+        let save_state = this.ringbuf.clone_buf_state();
+
+        match save_state {
+            BufState::Writable => {
+                //check if there is some stream to read data from.
+                if let Some(stream) = this.stream{
+                    //clear the inner buffer
+                    vec_buf.clear();
+                    //there is a stream, try to read
+                    let pinned_stream = Pin::new(stream.as_mut());
+                    match pinned_stream.poll_read(cx, &mut read_buf) {
+                        Poll::Pending => {
+                            //the stream is not ready, so we just return Pending.
+                            this.ringbuf.writer_waker_save(cx.waker().clone());
+                            return Poll::Pending;
+                        }
+                        Poll::Ready(Ok()) => {
+                            //read some data from the stream, and stored it in the buffer already.
+
+                            //check if we get all the data from the stream.
+                            if read_buf.filled().is_empty() {
+                                //the stream is empty, so we set the state to WriteFinished, and waker the writer.
+                                this.ringbuf.set_buf_state(BufState::WriteFinished);
+                                this.ringbuf.wake_reader();
+                                return Poll::Ready(Ok(0));
+                            }
+
+                            //not get the all data from the stream, so we set the state to Readable, 
+                            //and waker the reader.
+                            this.ringbuf.set_buf_state(BufState::Readable);
+                            this.ringbuf.wake_reader();
+                            let nwrite = this.ringbuf.len();
+                            return Poll::Ready( Ok(nwrite));
+                        }
+                        Poll::Ready(Err(e)) => {
+                            return Poll::Ready(Err(
+                                HError::Message { message: format!("read stream error") }
+                            ));
+                        }
+                    }
+                }else {
+                    //there is no stream, so we just return Pending.
+                    return Poll::Ready(Err(
+                        HError::Message { message: format!("no stream to read") }
+                    ))
+                }
+
+            }
+            BufState::Readable => {
+                //the buffer is readable, so we just return Pending.
+                this.ringbuf.writer_waker_save(cx.waker().clone());
+                return Poll::Pending;
+            }
+            BufState::WriteFinished => {
+                //the buffer is write finished, so we just return Ready.
+                return Poll::Ready(Ok(0));
+            }
+        }
+    }
 }
-*/
 
 
 pub struct ConsumerBuf<T>
