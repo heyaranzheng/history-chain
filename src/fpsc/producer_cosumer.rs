@@ -10,13 +10,13 @@ use crate::fpsc::ringbuf::Ringbuf;
 use crate::fpsc::ringbuf::BufState;
 
 ///This is a wrapper of Ringbuf, it is used to provide a producer-consumer pattern.
-pub struct ProducerBuf
+pub struct ProducerBuf <'a>
 {
     pub ringbuf: Ringbuf,
-    stream: Option<Box<dyn AsyncRead + Unpin>>,
+    stream: Option<Box<dyn AsyncRead + Unpin + 'a>>,
 }
 
-impl ProducerBuf 
+impl <'a> ProducerBuf <'a>
 {
     pub fn new(ringbuf: Ringbuf) -> Self {
         Self { ringbuf, stream: None}
@@ -37,36 +37,60 @@ impl ProducerBuf
     pub fn capacity(&self) -> usize {
         unsafe {self.ringbuf.capacity() }
     }
-
-    ///copy the data from some steam to the inner buffer.
-    pub async fn produce_from_stream<S> (&mut self, stream: &mut S) 
-        -> Result<usize, HError>
-        where S: AsyncRead + Unpin
+    
+    //add a stream to the producer
+    pub fn stream<T>(&mut self, stream: T) -> &mut Self 
+        where T: AsyncRead + Unpin + 'a,
     {
-        let vec_buf = self.ringbuf.get_mut_vec_buf();
-        let nwrite = stream.read(&mut vec_buf[..]).await?;
-        Ok(nwrite)
-    }   
+        self.stream = Some(Box::new(stream));
+        self
+    }
+
+    ///copy the data from some stream to the inner buffer.
+    pub async fn produce_from_stream<S> (&mut self, stream: S) 
+        -> Result<usize, HError>
+        where S: AsyncRead + Unpin + 'a 
+    {
+        //add this stream to the producer   
+        self.stream(stream);
+
+        let mut total = 0;
+        loop {
+
+            let pinned_producer = Pin::new(&mut (*self));
+            let n = pinned_producer.await?;
+            total += n;
+            if n == 0 {
+                break;
+            }
+        }
+        Ok(total)
+    }
+    
     
 }
 
-impl Future for ProducerBuf
+impl <'a> Future for ProducerBuf<'a>
 {
     type Output = Result<usize, HError>;
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let vec_buf = self.ringbuf.get_mut_vec_buf();
-
-        //create a ReadBuf from the inner buffer
-        let mut read_buf = ReadBuf::new(&mut vec_buf[..]);
         let this = self.get_mut();
+       
+       
         let save_state = this.ringbuf.clone_buf_state();
 
         match save_state {
             BufState::Writable => {
                 //check if there is some stream to read data from.
-                if let Some(stream) = this.stream{
+                if let Some(stream) = &mut this.stream{
+                    //get the mutable reference of the inner buffer
+                    let vec_buf = this.ringbuf.get_mut_vec_buf();
                     //clear the inner buffer
                     vec_buf.clear();
+                    
+                     //create a ReadBuf from the inner buffer
+                    let mut read_buf = ReadBuf::new(&mut vec_buf[..]);
+                    
                     //there is a stream, try to read
                     let pinned_stream = Pin::new(stream.as_mut());
                     match pinned_stream.poll_read(cx, &mut read_buf) {
@@ -75,7 +99,7 @@ impl Future for ProducerBuf
                             this.ringbuf.writer_waker_save(cx.waker().clone());
                             return Poll::Pending;
                         }
-                        Poll::Ready(Ok()) => {
+                        Poll::Ready(Ok(())) => {
                             //read some data from the stream, and stored it in the buffer already.
 
                             //check if we get all the data from the stream.
@@ -95,14 +119,14 @@ impl Future for ProducerBuf
                         }
                         Poll::Ready(Err(e)) => {
                             return Poll::Ready(Err(
-                                HError::Message { message: format!("read stream error") }
+                                HError::Message { message: format!("read stream error: {}\n", e) }
                             ));
                         }
                     }
                 }else {
                     //there is no stream, so we just return Pending.
                     return Poll::Ready(Err(
-                        HError::Message { message: format!("no stream to read") }
+                        HError::Message { message: format!("no stream to read\n") }
                     ))
                 }
 
@@ -113,7 +137,7 @@ impl Future for ProducerBuf
                 return Poll::Pending;
             }
             BufState::WriteFinished => {
-                //the buffer is write finished, so we just return Ready.
+                //write finished, so we just return Ready. end this task.
                 return Poll::Ready(Ok(0));
             }
         }
@@ -148,7 +172,7 @@ impl <C> ConsumerBuf<C>
         self
     }
 
-    pub fn with_closure(capacity: usize, closure: C) -> (ProducerBuf, Self) {
+    pub fn with_closure<'a>(capacity: usize, closure: C) -> (ProducerBuf<'a>, Self) {
         let (writer, reader) = Ringbuf::new(capacity);
         let consumer = Self {
             ringbuf: reader,
@@ -161,12 +185,6 @@ impl <C> ConsumerBuf<C>
     ///return the capacity of the inner buffer
     pub fn capacity(&self) -> usize {
        self.ringbuf.capacity() 
-    }
-
-    //return the mutable reference of the inner buffer
-    #[inline]
-    fn get_mut_vec_buf(&mut self) -> &mut Vec<u8> {
-        self.ringbuf.get_mut_vec_buf()
     }
 
     //return the state of the inner buffer
@@ -246,16 +264,12 @@ impl <T> Future for ConsumerBuf<T>
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         let save_state = this.clone_buf_state();
-        
-        //use this unsafe code to avoid the borrow checker of "this" pointer.
-        //Or we have to implement a Clone trait for task in the ConsumerBuf struct.
-        let  vec_buf = unsafe {
-            &mut (*this.ringbuf.buf.inner).buf
-        };
+    
         match save_state {
             BufState::Readable => {
                 //if we have some tast to do, we will do it here.
                 if let Some(task) = &mut this.task {
+                    let vec_buf = this.ringbuf.get_mut_vec_buf();
                     let task_result = task(& mut vec_buf[..]);
                     match task_result {
                         Ok(_) => {
@@ -287,6 +301,7 @@ impl <T> Future for ConsumerBuf<T>
             BufState::WriteFinished => {
                 //if we have some tast to do, we will do it here.
                 if let Some(closure) = & mut this.task {
+                    let vec_buf = this.ringbuf.get_mut_vec_buf();
                     let result =closure(& mut vec_buf[..]);
                     match result {
                         Ok(_) => {
@@ -352,6 +367,26 @@ mod tests {
 
         };
 
+        tokio::join!(produce_task, consume_task);
+    }
+
+    #[tokio::test]
+    async fn test_producer_consumer_stream() {
+        let (mut producer, mut consumer) = 
+            ConsumerBuf::with_closure(10, |data: &mut [u8]| {
+                println!("data in consumer: {:?}", data);
+                Ok(())
+            });
+
+        let data = vec![1u8; 11];
+        let reader = std::io::Cursor::new(data.clone());
+        let produce_task = async move {
+            producer.produce_from_stream(reader).await.unwrap();
+        };
+
+        let consume_task = async move {
+            consumer.consume_all().await.unwrap();  
+        };
         tokio::join!(produce_task, consume_task);
     }
 

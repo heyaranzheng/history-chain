@@ -8,7 +8,7 @@ use crate::fpsc::producer_cosumer::{ ConsumerBuf, ProducerBuf};
 use crate::fpsc::ringbuf::Ringbuf;
 
 
-pub fn new <C>(capacity: usize) -> (ProducerBuf, ConsumerBuf<C>)
+pub fn new <'a,C>(capacity: usize) -> (ProducerBuf<'a>, ConsumerBuf<C>)
     where C: FnMut(&mut [u8])-> Result<(), HError> + Unpin,
 {
     let (writer, reader) = Ringbuf::new(capacity);
