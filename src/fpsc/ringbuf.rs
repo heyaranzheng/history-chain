@@ -20,6 +20,7 @@ pub enum BufState {
     Writable,
     Readable,
     WriteFinished,
+    ReadFinished,
 }
 
 impl  Inner
@@ -223,7 +224,7 @@ impl  AsyncWrite for Ringbuf
                 this.writer_waker_save(cx.waker().clone());
                 Poll::Pending
             }
-            BufState::WriteFinished => {
+            BufState::WriteFinished | BufState::ReadFinished => {
                 //here, we must wake the reader, because the reader may be waiting for data,
                 this.wake_reader();
                 return Poll::Ready(Ok(0));
@@ -249,7 +250,7 @@ impl AsyncRead for Ringbuf {
         let  vec_buf = this.get_mut_vec_buf();
         
         match save_state {
-            BufState::Readable | BufState::WriteFinished => {
+            BufState::Readable | BufState::WriteFinished | BufState::ReadFinished => {
                 //check if the reader can read all the data.
                 let total = vec_buf.len();
                 let nread = total.min(buf.capacity());
@@ -280,6 +281,9 @@ impl AsyncRead for Ringbuf {
                     vec_buf.clear();
 
                     return Poll::Ready(Ok(())); 
+                }else if save_state == BufState::ReadFinished {
+                    vec_buf.clear();
+                    return Poll::Ready(Ok(()));
                 }
 
                 //change  the state to Writable, and wake the writer.

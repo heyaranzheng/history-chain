@@ -76,7 +76,6 @@ impl <'a> Future for ProducerBuf<'a>
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
        
-       
         let save_state = this.ringbuf.clone_buf_state();
 
         match save_state {
@@ -85,11 +84,13 @@ impl <'a> Future for ProducerBuf<'a>
                 if let Some(stream) = &mut this.stream{
                     //get the mutable reference of the inner buffer
                     let vec_buf = this.ringbuf.get_mut_vec_buf();
-                    //clear the inner buffer
-                    vec_buf.clear();
                     
-                     //create a ReadBuf from the inner buffer
-                    let mut read_buf = ReadBuf::new(&mut vec_buf[..]);
+                    //create a ReadBuf from the inner buffer, with the capacity of the inner buffer.
+                    let uninit_slice = unsafe {
+                        let ptr = vec_buf.as_mut_ptr() as *mut std::mem::MaybeUninit<u8>;
+                        std::slice::from_raw_parts_mut(ptr, vec_buf.capacity())
+                    };
+                    let mut read_buf = ReadBuf::uninit(uninit_slice);
                     
                     //there is a stream, try to read
                     let pinned_stream = Pin::new(stream.as_mut());
@@ -102,16 +103,33 @@ impl <'a> Future for ProducerBuf<'a>
                         Poll::Ready(Ok(())) => {
                             //read some data from the stream, and stored it in the buffer already.
 
+                            //get the number of bytes we get from the stream.
+                            let filled_len = read_buf.filled().len();
+
                             //check if we get all the data from the stream.
-                            if read_buf.filled().is_empty() {
+                            if filled_len < read_buf.capacity() {
                                 //the stream is empty, so we set the state to WriteFinished, and waker the writer.
+                                
+                                //Note: we have filled data into the inner buffer, but we don't update the
+                                //legnth of the buffer. Update now.
+                                unsafe {
+                                    vec_buf.set_len(filled_len);
+                                }   
                                 this.ringbuf.set_buf_state(BufState::WriteFinished);
                                 this.ringbuf.wake_reader();
-                                return Poll::Ready(Ok(0));
+                                let nwrite = this.ringbuf.len();
+                                return Poll::Ready(Ok(nwrite));
                             }
 
                             //not get the all data from the stream, so we set the state to Readable, 
                             //and waker the reader.
+
+                            //Note: we have filled data into the inner buffer, but we don't update the
+                            //legnth of the buffer. Update now.
+                            unsafe {
+                                vec_buf.set_len(filled_len);
+                            }
+
                             this.ringbuf.set_buf_state(BufState::Readable);
                             this.ringbuf.wake_reader();
                             let nwrite = this.ringbuf.len();
@@ -136,7 +154,7 @@ impl <'a> Future for ProducerBuf<'a>
                 this.ringbuf.writer_waker_save(cx.waker().clone());
                 return Poll::Pending;
             }
-            BufState::WriteFinished => {
+            BufState::WriteFinished | BufState::ReadFinished => {
                 //write finished, so we just return Ready. end this task.
                 return Poll::Ready(Ok(0));
             }
@@ -243,7 +261,7 @@ impl <C> ConsumerBuf<C>
             //need to worry about the state changed to WriteFinished when we don't read all 
             //the data.
             let state = self.clone_buf_state();
-            if state == BufState::WriteFinished { 
+            if state == BufState::ReadFinished { 
                 break;
             }
         }
@@ -254,8 +272,8 @@ impl <C> ConsumerBuf<C>
 ///The Future wrapper a number of bytes consumed by the closure. 
 ///Note: 
 ///     We CAN NOT use the number of bytes "0" ,which is wrapped in this Future, to 
-///     judge whether all the data is consumed derectly. Unless that the first write is 0 byte, there
-///     is no way to get a 0 byte from this wrapper Future.
+///     judge whether all the data is consumed derectly. Unless that the first write is 0 byte
+///     or the data produced  from a stream , there is no way to get a 0 byte from this wrapper Future.
 impl <T> Future for ConsumerBuf<T> 
     where T: FnMut(&mut [u8])-> Result<(), HError>,
         Self: Unpin
@@ -298,16 +316,28 @@ impl <T> Future for ConsumerBuf<T>
 
             //the action of this state is almost like the state of Readable, but we don't need
             //to change the state and notify the writer.
-            BufState::WriteFinished => {
+            BufState::WriteFinished | BufState::ReadFinished => {
+                if save_state == BufState::ReadFinished {
+                    //this means everything is consumed, we don't need to deal with the data any more.
+                    return Poll::Ready(Ok(0));
+                }
+                
+                //The state is BufState::WriteFinished, at here.
+
                 //if we have some tast to do, we will do it here.
                 if let Some(closure) = & mut this.task {
                     let vec_buf = this.ringbuf.get_mut_vec_buf();
                     let result =closure(& mut vec_buf[..]);
                     match result {
                         Ok(_) => {
-                            return Poll::Ready(Ok(vec_buf.len()));
+                            let nread = vec_buf.len();
+                            //set the state to ReadFinished, declare the comsume is finished.
+                            this.set_buf_state(BufState::ReadFinished);
+                            return Poll::Ready(Ok(nread));
                         }
                         Err(_) => {
+                            //set the state to ReadFinished, declare the comsume is finished.
+                            this.set_buf_state(BufState::ReadFinished);
                             return Poll::Ready(
                                 Err(
                                     HError::Message { message: "error in consumer closure".to_string() }
@@ -316,6 +346,8 @@ impl <T> Future for ConsumerBuf<T>
                         }
                     }
                 }
+                //set the state to ReadFinished, declare the comsume is finished.
+                this.set_buf_state(BufState::ReadFinished);
                 //the closure is None, so we just return Ready(Ok(()))
                 return Poll::Ready(Ok(0));
             }
@@ -360,7 +392,7 @@ mod tests {
                 //It will block here unless the data is ready to consume. So, we don't need to worry 
                 //about the state changed to WriteFinished when we don't read all the data.
                 let state = consumer.clone_buf_state();
-                if state == BufState::WriteFinished {
+                if state == BufState::ReadFinished {
                     break;
                 }
             }
