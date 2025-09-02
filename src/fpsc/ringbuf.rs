@@ -147,6 +147,7 @@ impl  Ringbuf
         vec_buf.clear();
         self.set_buf_state(BufState::Writable);
     }
+  
 }
 
 //we will clone the Ringbuf if we use it in multiple tasks, so we will have serveral pointers pointed to 

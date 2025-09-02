@@ -7,9 +7,10 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::{Sender, Receiver};
 
 use crate::chain_manager::ChainManager;
-use crate::constants::{Hash, UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
+use crate::constants::{ UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
 use crate::message::Message;
+use crate::hash::Hash;
 
 #[async_trait]
 pub trait Node {

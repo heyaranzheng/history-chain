@@ -70,6 +70,8 @@ impl <'a> ProducerBuf <'a>
     
 }
 
+unsafe impl <'a> Send for ProducerBuf<'a> {}
+
 impl <'a> Future for ProducerBuf<'a>
 {
     type Output = Result<usize, HError>;

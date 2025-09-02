@@ -1,5 +1,5 @@
-//need to be enclosed into some struct
-pub type Hash = [u8;32];
+use crate::hash::Hash;
+
 pub type UuidBytes = [u8; 16];
 pub type Location = usize;
 pub type Bytes = Vec<u8>;
