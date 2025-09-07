@@ -1,4 +1,7 @@
 use thiserror:: Error;
+use env_logger;
+use log;
+
 
 #[derive(Error, Debug)]
 pub enum HError {
@@ -47,3 +50,79 @@ pub enum HError {
     Serialization {message: String},
 }
 
+
+///init logger for the project with default level, print from the level of "log::level::error".
+pub fn logger_init() {
+    env_logger::init();
+}
+///init logger for the project with custom level
+///log::Level::Trace < log::Level::Debug < log::Level::Info < log::Level::Warn < log::Level::Error
+fn logger_init_with_level(level: log::LevelFilter) {
+    env_logger::Builder::from_default_env()
+       .filter_level(level)
+       .init();
+}
+///init logger for the project with custom level above info
+#[inline]
+pub fn logger_init_above_info() {
+    logger_init_with_level(log::LevelFilter::Info);
+}
+///init logger for the project with custom level above debug
+#[inline]
+pub fn logger_init_above_debug() {
+    logger_init_with_level(log::LevelFilter::Debug);
+}
+///init logger for the project with custom level above trace
+#[inline]
+pub fn logger_init_above_trace() {
+    logger_init_with_level(log::LevelFilter::Trace);
+}
+///init logger for the project with custom level above error
+#[inline]
+pub fn logger_init_above_error() {  
+    logger_init_with_level(log::LevelFilter::Warn);
+}
+
+
+//wrap the log macros, to make it easy to use
+#[inline]
+pub fn logger_info(msg: &str) {
+    log::info!("{}", msg);
+}
+#[inline]
+pub fn logger_error(msg: &str) {
+    log::error!("{}", msg);
+}
+pub fn logger_error_with_error(error: &HError) {
+    log::error!("{:?}", error);
+}
+pub fn logger_debug(msg: &str) {
+    log::debug!("{}", msg);
+}
+pub fn logger_debug_with_error(error: &HError) {   
+    log::debug!("{:?}", error);
+}
+
+
+
+#[cfg(test)]
+#[test]
+ fn test_logger() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    rt.block_on( async  {
+        logger_init();
+        tokio::spawn(
+            async move {
+                logger_info("test logger info");
+                logger_error("test logger error");
+                logger_debug("test logger debug");
+            }
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
+    
+}
