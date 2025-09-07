@@ -1,4 +1,4 @@
-use crate::hash::Hash;
+use crate::hash::HashValue;
 
 pub type UuidBytes = [u8; 16];
 pub type Location = usize;

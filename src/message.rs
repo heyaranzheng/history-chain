@@ -1,23 +1,24 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::constants::{Hash, ZERO_HASH, MAX_MSG_SIZE};
+use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
 use crate::chain::NomalChain;
 use crate::herrors::HError;
+use crate::hash::HashValue;
 
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct Message {
     ///message's hash
-    pub hash: Hash,
+    pub hash: HashValue,
     //the hash name of the sender node
-    pub sender: Hash,
+    pub sender: HashValue,
     ///message's timestamp
     pub timestamp: u64,
     ///message's type 
     pub message_type: MessageType,
     ///the hash name of the receiver node
-    pub receiver: Hash,
+    pub receiver: HashValue,
 }
 
 impl Message {
@@ -66,8 +67,8 @@ pub enum MessageType {
     ///if the vote report show that the block is invalid, the data of the block keeped should be
     ///recitified by the network.
     BlockRecitify(BlockReci),
-    ///serch friends, Hash is the name of the node that want to search for friends.
-    SearchFriend(Hash),
+    ///serch friends, HashValue is the name of the node that want to search for friends.
+    SearchFriend(HashValue),
 }
 
 unsafe impl Send for MessageType {}
@@ -82,15 +83,15 @@ pub struct VoteBlock {
     ///expire time of the vote
     pub expire_time: u64,
     ///the block's hash
-    pub block_hash: Hash,
+    pub block_hash: HashValue,
     ///the voter's name.   
-    pub voter: Hash,
+    pub voter: HashValue,
     ///the voter's vote
     pub vote: bool,
     ///time of this vote
     pub timestamp: u64,
     ///the suspected block's hash
-    suspected_block: Hash,
+    suspected_block: HashValue,
     ///the consensus of the network, the result will be a number between 0 and 1,
     result: f32,
 }
@@ -101,8 +102,8 @@ unsafe impl Send for VoteBlock {}
 ///recitified by the network.
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct BlockReci {
-    old_block: Hash,
-    new_block: Hash,
+    old_block: HashValue,
+    new_block: HashValue,
 }
 
 

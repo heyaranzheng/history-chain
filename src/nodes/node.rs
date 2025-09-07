@@ -10,14 +10,14 @@ use crate::chain_manager::ChainManager;
 use crate::constants::{ UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
 use crate::message::Message;
-use crate::hash::Hash;
+use crate::hash::HashValue;
 
 #[async_trait]
 pub trait Node {
     ///this node is a center?
     fn is_center(&self) -> bool;
     ///get a friend node's address by its name
-    fn get_friend_address(&self, name: Hash) -> Option<String>;
+    fn get_friend_address(&self, name: HashValue) -> Option<String>;
 
     ///udp connection, receive message from all nodes, return message and source address
     async fn upd_recv_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr), HError> {
@@ -118,7 +118,7 @@ pub enum NodeState {
 
 pub struct UserNode {
     ///name of the node
-    pub name: Hash,
+    pub name: HashValue,
     ///address of the node
     pub address: Option<String>,
     ///node's birthday
@@ -136,7 +136,7 @@ pub struct UserNode {
 }
 
 impl UserNode {
-    pub fn new(name: Hash, capacity: usize) -> Self {
+    pub fn new(name: HashValue, capacity: usize) -> Self {
         Self {
             name,
             address: None,
@@ -157,7 +157,7 @@ impl Node for UserNode {
     }
     
     //find a friend node's address by its name, return None if not found
-    fn get_friend_address(&self, name: Hash) -> Option<String> {
+    fn get_friend_address(&self, name: HashValue) -> Option<String> {
         self.friends.iter().find(|f| f.name == name)
             .map(|f| f.address.clone())
     }
