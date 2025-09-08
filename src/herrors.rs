@@ -114,7 +114,7 @@ pub fn logger_debug_with_error(error: &HError) {
         .build()
         .unwrap();
     rt.block_on( async  {
-        logger_init();
+        logger_init_above_info();
         tokio::spawn(
             async move {
                 logger_info("test logger info");

@@ -4,13 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
 use crate::chain::NomalChain;
 use crate::herrors::HError;
-use crate::hash::HashValue;
+use crate::hash:: {HashValue, Hasher};
 
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct Message {
-    ///message's hash
-    pub hash: HashValue,
     //the hash name of the sender node
     pub sender: HashValue,
     ///message's timestamp
@@ -24,7 +22,6 @@ pub struct Message {
 impl Message {
     pub fn new_with_zero() -> Self{
         Self {
-            hash: ZERO_HASH,
             sender: ZERO_HASH,
             timestamp: 0,
             message_type: MessageType::ChainRequest(0),

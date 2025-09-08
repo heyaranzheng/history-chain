@@ -4,7 +4,9 @@ use uuid::Uuid;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
+
 use crate::{constants::ZERO_HASH, herrors::HError}; 
+use crate::message::Message;
 
 //use [u8; 32] as hash type
 pub type HashValue = [u8; 32];
@@ -57,8 +59,8 @@ pub trait Hasher {
         hash
     }
 
+
 }
 
 #[async_trait]
-impl Hasher for HashValue { 
-}
+impl Hasher for HashValue {}

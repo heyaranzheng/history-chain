@@ -10,31 +10,64 @@ use crate::chain_manager::ChainManager;
 use crate::constants::{ UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
 use crate::message::Message;
-use crate::hash::HashValue;
+use crate::hash:: {HashValue, Hasher};
+
 
 #[async_trait]
 pub trait Node {
     ///this node is a center?
     fn is_center(&self) -> bool;
     ///get a friend node's address by its name
-    fn get_friend_address(&self, name: HashValue) -> Option<String>;
+    fn get_friend_address(&self, name: HashValue) -> Result<Option<String>, HError>;
+    ///get my address
+    fn my_address(&self) -> Option<String>;
+    ///get my name
+    fn my_name(&self) -> HashValue;
 
     ///udp connection, receive message from all nodes, return message and source address
-    async fn upd_recv_from(&self, buf: &mut [u8]) -> Result<(Message, SocketAddr), HError> {
-        //check  the buffer size
-        if buf.len() < MAX_UDP_MSG_SIZE {
-            return Err(HError::RingBuf { message: format!("buffer size is too small, need at least {}", MAX_UDP_MSG_SIZE) });
-        }
+    async fn udp_recv_from(&self) -> Result< (Message, String), HError> {
+        let mut buf = vec![0; MAX_UDP_MSG_SIZE];
+ 
         //bind to udp port for any address
         let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
         //receive data from udp socket
-        let (_, src_addr) = udp_socket.recv_from(buf).await?;
+        let (size, src_addr) = udp_socket.recv_from(&mut buf).await?;
+        let src_addr_str = format!("{}", src_addr.ip());
         
         //deserialize data to message
-        let msg = Message::decode_from_slice(buf)?;
+        let msg = Message::decode_from_slice(&buf[..size])?;
 
-        Ok((msg, src_addr))
+        Ok((msg, src_addr_str))
     }
+    ///udp connection, send message to another node
+    async fn udp_send_to(&self, dst_addr: String, msg: &Message) -> Result<usize, HError> 
+    
+    {
+
+        let msg_encoded = msg.encode_to_vec()?;
+        //check the buffer size
+        if msg_encoded.len() > MAX_UDP_MSG_SIZE {
+            return Err(
+                HError::NetWork { 
+                    message: format!("buffer size is too large, need at most {}", MAX_UDP_MSG_SIZE)
+                } 
+            );
+        }
+        //bind self address and udp port
+        let my_address = self.my_address();
+    
+        if my_address.is_none() {
+            return Err(HError::NetWork{ message: format!("address is not set") });
+        }
+        let udp_socket = 
+            UdpSocket::bind(format!("{}:{}", my_address.unwrap(), UDP_PORT)).await?;
+
+        //send data to dst_addr
+        udp_socket.send_to(&msg_encoded[..], dst_addr).await;
+        Ok(msg_encoded.len())
+    }
+
+
     ///tcp connection
     async fn tcp_listen(&self) ->
         (Sender<bool>, Receiver<Vec<u8>>, tokio::task::JoinHandle<Result<(), HError>>) {
@@ -114,17 +147,17 @@ pub enum NodeState {
     Sleepping,
 }
 
-
+type NodeName = HashValue;
 
 pub struct UserNode {
     ///name of the node
-    pub name: HashValue,
+    pub name: NodeName,
     ///address of the node
     pub address: Option<String>,
     ///node's birthday
     pub timestamp: u64,
-    ///friend nodes, new with a parameter to set the capacity of the friends list
-    pub friends:Vec<UserNode>,
+    ///friend nodes, HashMap<name, UserNode>
+    pub friends: HashMap< NodeName, UserNode>,
     pub center_address: Option<String>,
     ///chain's manager
     pub chain_manager: Option<ChainManager>,
@@ -132,16 +165,15 @@ pub struct UserNode {
     pub reputation: Reputation,
     ///node's state
     pub state: NodeState,
-
 }
 
 impl UserNode {
-    pub fn new(name: HashValue, capacity: usize) -> Self {
+    pub fn new(name: NodeName, capacity: usize) -> Self {
         Self {
             name,
             address: None,
             timestamp: 0,
-            friends: Vec::with_capacity(capacity),
+            friends: HashMap::with_capacity(capacity),
             center_address: None,
             chain_manager: None,
             reputation: Reputation::new(),
@@ -149,7 +181,7 @@ impl UserNode {
         }
     }
 }
-/* 
+ 
 #[async_trait]
 impl Node for UserNode {
     fn is_center(&self) -> bool {
@@ -157,20 +189,41 @@ impl Node for UserNode {
     }
     
     //find a friend node's address by its name, return None if not found
-    fn get_friend_address(&self, name: HashValue) -> Option<String> {
-        self.friends.iter().find(|f| f.name == name)
-            .map(|f| f.address.clone())
+    fn get_friend_address(&self, name: HashValue) -> Result<Option<String>, HError> {
+        if let Some(friend) = self.friends.get(&name) {
+            return Ok(friend.address.clone());
+        }
+        return Err(HError::Message { message: format!("this friend not found") });
     }
-    
+    fn get_address(&self) -> Option<String> {
+        self.address.clone()
+    }
 }
-    */
+    
 
 
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {
+        let node = UserNode::new(HashValue::random(), 10);
+        let msg = Message {
+            hash: HashValue::random(),
+            sender: HashValue::random(),
+            timestamp: 0,
+            message_type: MessageType::Request,
+            receiver: HashValue::random(),
+        };
+        let save_msg = msg.clone();
+        tokio::spawn(async move {
+           let mut node = UserNode::new(HashValue::random(), 10);
+           node.address = Some("127.0.0.1:8080".to_string());
+           node.udp_send_to(format!("127.0.0.1:8081"), &msg).await.unwrap();
+        });
+        let node2 = UserNode::new(HashValue::random(), 10);
+        let (msg , src_addr) = 
+
     }
 }
 
