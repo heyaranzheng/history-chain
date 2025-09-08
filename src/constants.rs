@@ -17,8 +17,10 @@ pub const PATH_CACHE_BUNDLE: &str = "cache/bundles";
 pub const BUFFER_SIZE: usize = 1024 * 32;
 
 //network constants
-pub const UDP_PORT: u16 = 8080;
-pub const TCP_PORT: u16 = 8088;
+pub const UDP_SENDER_PORT: u16 = 8080;
+pub const UDP_RECV_PORT: u16 = 8081;
+pub const TCP_SENDER_PORT: u16 = 8088;
+pub const TCP_RECV_PORT: u16 = 8089;
 pub const MAX_MSG_SIZE: usize = 1024 * 1024; // 1MB
 pub const MAX_UDP_MSG_SIZE: usize= 1024; // 1KB
 pub const MTU_SIZE: usize = 1500; // 1500 bytes

@@ -9,7 +9,7 @@ use crate::hash:: {HashValue, Hasher};
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub struct Message {
-    //the hash name of the sender node
+    ///the hash name of the sender node
     pub sender: HashValue,
     ///message's timestamp
     pub timestamp: u64,

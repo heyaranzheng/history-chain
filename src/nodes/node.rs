@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::{Sender, Receiver};
 
 use crate::chain_manager::ChainManager;
-use crate::constants::{ UDP_PORT, TCP_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
+use crate::constants::{ UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
-use crate::message::Message;
+use crate::message::{Message, MessageType};
 use crate::hash:: {HashValue, Hasher};
 
 
@@ -29,10 +29,10 @@ pub trait Node {
         let mut buf = vec![0; MAX_UDP_MSG_SIZE];
  
         //bind to udp port for any address
-        let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_PORT)).await?;
+        let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_RECV_PORT)).await?;
         //receive data from udp socket
         let (size, src_addr) = udp_socket.recv_from(&mut buf).await?;
-        let src_addr_str = format!("{}", src_addr.ip());
+        let src_addr_str = format!("{}:{}", src_addr.ip(), src_addr.port());
         
         //deserialize data to message
         let msg = Message::decode_from_slice(&buf[..size])?;
@@ -54,17 +54,18 @@ pub trait Node {
             );
         }
         //bind self address and udp port
-        let my_address = self.my_address();
-    
-        if my_address.is_none() {
-            return Err(HError::NetWork{ message: format!("address is not set") });
+        if let Some(my_addr) = self.my_address() { 
+            let udp_socket =UdpSocket::bind(format!("{}", my_addr)).await?;
+            //send data to dst_addr
+            let _ = udp_socket.send_to(&msg_encoded[..], dst_addr).await?;
+            Ok(msg_encoded.len())
+        }else {
+            Err(
+                HError::NetWork {
+                    message: format!("my address is not set")
+                }
+            )
         }
-        let udp_socket = 
-            UdpSocket::bind(format!("{}:{}", my_address.unwrap(), UDP_PORT)).await?;
-
-        //send data to dst_addr
-        udp_socket.send_to(&msg_encoded[..], dst_addr).await;
-        Ok(msg_encoded.len())
     }
 
 
@@ -81,7 +82,7 @@ pub trait Node {
 
         let handle: tokio::task::JoinHandle<Result<(), HError>> = tokio::task::spawn( async move{
             //bind to tcp port for any address
-            let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_PORT)).await?;
+            let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
             loop {
                 //check if the switcher is closed
                 let signal =switcher_receiver.try_recv();
@@ -195,8 +196,13 @@ impl Node for UserNode {
         }
         return Err(HError::Message { message: format!("this friend not found") });
     }
-    fn get_address(&self) -> Option<String> {
+    #[inline]
+    fn my_address(&self) -> Option<String> {
         self.address.clone()
+    }
+    #[inline]
+    fn my_name(&self) -> HashValue {
+        self.name
     }
 }
     
@@ -204,26 +210,28 @@ impl Node for UserNode {
 
 mod tests {
     use super::*;
+    use crate::message::MessageType;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {
-        let node = UserNode::new(HashValue::random(), 10);
         let msg = Message {
-            hash: HashValue::random(),
             sender: HashValue::random(),
             timestamp: 0,
-            message_type: MessageType::Request,
+            message_type: MessageType::ChainRequest(0),
             receiver: HashValue::random(),
         };
         let save_msg = msg.clone();
         tokio::spawn(async move {
-           let mut node = UserNode::new(HashValue::random(), 10);
-           node.address = Some("127.0.0.1:8080".to_string());
-           node.udp_send_to(format!("127.0.0.1:8081"), &msg).await.unwrap();
+            let mut node = UserNode::new(HashValue::random(), 10);
+            node.address = Some(format!("127.0.0.1:{}", UDP_SENDER_PORT));
+            node.udp_send_to(format!("127.0.0.1:{}", UDP_RECV_PORT), &msg).await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+          
         });
+      
         let node2 = UserNode::new(HashValue::random(), 10);
-        let (msg , src_addr) = 
-
+        let (msg , src_addr) = node2.udp_recv_from().await.unwrap();
+        assert_eq!(msg, save_msg);
     }
 }
 

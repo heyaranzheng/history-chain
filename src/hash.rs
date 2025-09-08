@@ -59,7 +59,6 @@ pub trait Hasher {
         hash
     }
 
-
 }
 
 #[async_trait]
