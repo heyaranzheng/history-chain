@@ -24,6 +24,7 @@ pub const TCP_RECV_PORT: u16 = 8089;
 pub const MAX_MSG_SIZE: usize = 1024 * 1024; // 1MB
 pub const MAX_UDP_MSG_SIZE: usize= 1024; // 1KB
 pub const MTU_SIZE: usize = 1500; // 1500 bytes
+pub const MAX_CONNECTIONS: usize= 100; // maximum number of  tcp connections
 
 use uuid::Uuid;
 pub trait  Init{

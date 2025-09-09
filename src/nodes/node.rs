@@ -1,125 +1,32 @@
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpStream, UdpSocket, TcpListener};
 use std::net::SocketAddr;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use async_trait::async_trait;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
+use std::sync::Arc;
 
 use crate::chain_manager::ChainManager;
-use crate::constants::{ UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
+use crate::constants::{
+    MAX_CONNECTIONS , UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, 
+    TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
 use crate::message::{Message, MessageType};
 use crate::hash:: {HashValue, Hasher};
 
 
 #[async_trait]
-pub trait Node {
-    ///this node is a center?
+pub trait Node {       
+    ///check if the node is the center node
     fn is_center(&self) -> bool;
-    ///get a friend node's address by its name
-    fn get_friend_address(&self, name: HashValue) -> Result<Option<String>, HError>;
-    ///get my address
-    fn my_address(&self) -> Option<String>;
-    ///get my name
+    ///get a friend's node information by its name
+    fn get_friend(&self, name: HashValue) -> Option<&UserNode>{None}
+    ///get node's name
     fn my_name(&self) -> HashValue;
-
-    ///udp connection, receive message from all nodes, return message and source address
-    async fn udp_recv_from(&self) -> Result< (Message, String), HError> {
-        let mut buf = vec![0; MAX_UDP_MSG_SIZE];
- 
-        //bind to udp port for any address
-        let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_RECV_PORT)).await?;
-        //receive data from udp socket
-        let (size, src_addr) = udp_socket.recv_from(&mut buf).await?;
-        let src_addr_str = format!("{}:{}", src_addr.ip(), src_addr.port());
-        
-        //deserialize data to message
-        let msg = Message::decode_from_slice(&buf[..size])?;
-
-        Ok((msg, src_addr_str))
-    }
-    ///udp connection, send message to another node
-    async fn udp_send_to(&self, dst_addr: String, msg: &Message) -> Result<usize, HError> 
-    
-    {
-
-        let msg_encoded = msg.encode_to_vec()?;
-        //check the buffer size
-        if msg_encoded.len() > MAX_UDP_MSG_SIZE {
-            return Err(
-                HError::NetWork { 
-                    message: format!("buffer size is too large, need at most {}", MAX_UDP_MSG_SIZE)
-                } 
-            );
-        }
-        //bind self address and udp port
-        if let Some(my_addr) = self.my_address() { 
-            let udp_socket =UdpSocket::bind(format!("{}", my_addr)).await?;
-            //send data to dst_addr
-            let _ = udp_socket.send_to(&msg_encoded[..], dst_addr).await?;
-            Ok(msg_encoded.len())
-        }else {
-            Err(
-                HError::NetWork {
-                    message: format!("my address is not set")
-                }
-            )
-        }
-    }
-
-
-    ///tcp connection
-    async fn tcp_listen(&self) ->
-        (Sender<bool>, Receiver<Vec<u8>>, tokio::task::JoinHandle<Result<(), HError>>) {
-        //crate mpsc channel for tcp connection
-        let (mut sender, mut receiver ) = 
-            tokio::sync::mpsc::channel(MAX_MSG_SIZE);
-        
-        let (mut closer, mut switcher_receiver) 
-            = tokio::sync::mpsc::channel::<bool>(1);
-        
-
-        let handle: tokio::task::JoinHandle<Result<(), HError>> = tokio::task::spawn( async move{
-            //bind to tcp port for any address
-            let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
-            loop {
-                //check if the switcher is closed
-                let signal =switcher_receiver.try_recv();
-                match signal {
-                    Ok(close) => {
-                        //receive a true, close the tcp listener
-                        if close == true  {
-                            break;
-                        }
-                        //not close, continue to accept tcp connection
-                    }
-                    Err(_) => {
-                        //no signal, continue to accept tcp connection
-                    }
-        
-                }
-                //accept tcp connection
-                let mut tcp_stream = tcp_listener.accept().await?.0;
-                let mut buf = vec![0; MTU_SIZE];
-                while tcp_stream.read(&mut buf[..]).await? != 0 {
-                    sender.send(buf).await
-                        .map_err(|e| 
-                            HError::Message { message: format!("send error: {}", e) }
-                        )?;
-                    buf = vec![0; MTU_SIZE];
-                }
-            }
-            Ok(())
-        });
-
-        ( closer, receiver, handle ) 
-    }
-    //send message to another node, use udp
-   
-        
-
-    
+    ///get node's address
+    fn my_address(&self) -> Option<String>;
 }
 
 
@@ -226,7 +133,6 @@ mod tests {
             node.address = Some(format!("127.0.0.1:{}", UDP_SENDER_PORT));
             node.udp_send_to(format!("127.0.0.1:{}", UDP_RECV_PORT), &msg).await.unwrap();
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-          
         });
       
         let node2 = UserNode::new(HashValue::random(), 10);
