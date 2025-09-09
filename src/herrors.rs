@@ -14,6 +14,10 @@ pub enum HError {
 
     #[error("DB error:{0}\n")]
     Database(#[from] sqlx::Error),
+
+    ///this is a custom error type
+    #[error("Pipe error:{0}\n")]
+    Pipe(#[from] PipeError),
     
     
     #[error("Join error:{0}\n")]
@@ -48,8 +52,15 @@ pub enum HError {
 
     #[error("Serialization error: {message}\n")]
     Serialization {message: String},
+    
 }
 
+///for pipe 
+pub enum PipeError {
+    Close,
+    Full,
+    Empty,
+}
 
 ///init logger for the project with default level, print from the level of "log::level::error".
 pub fn logger_init() {

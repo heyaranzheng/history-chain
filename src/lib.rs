@@ -8,3 +8,4 @@ mod message;
 mod chain;
 mod fpsc;
 mod hash;
+mod pipe;
