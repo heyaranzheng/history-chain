@@ -10,9 +10,25 @@ use crate::constants::{
     TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors;
 use crate::herrors::HError;
+use crate::herrors::logger_error_with_error;
+use crate::herrors::logger_info;
 use crate::message::Message;
 use crate::hash:: {HashValue, Hasher};
 use crate::nodes::UserNode;
+use crate::pipe::Pipe;
+
+///signals used to  communicate with other threads
+pub enum Signal {
+    Close,
+    ListenResult(TcpStream, String),
+}
+impl Signal {
+    ///create a new listen result signal
+    fn new_listen_result( listen_result: (TcpStream, SocketAddr)) -> Self {
+        let sockaddr_str = format!("{}:{}", listen_result.1.ip(), listen_result.1.port());
+        Self::ListenResult(listen_result.0, sockaddr_str)
+    }
+}
 
 #[async_trait]
 pub trait NetWork{
@@ -64,92 +80,94 @@ pub trait NetWork{
     }
 }
 
-    ///create a new thread to listen tcp port for incoming connections
-async fn tcp_listen_with_thread(&self) -> Result<(), HError> {
+///create a new thread to listen tcp port for incoming connections
+async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
     let (mut sender, mut receiver) = mpsc::channel(100);
     let liesten_task = async move {
         loop {
+            //if we get a close signal, break the loop, end the thread
+            if let Ok(Signal::Close) = pipe.try_recv() {
+                break;
+            }
+
             //accept incoming connections
-            let listen_result = listener.accept().await;
-            match listen_result {
-                Ok((mut tcp_stream, sockaddr)) => {
-                    let src_addr_str = format!("{}:{}", sockaddr.ip(), sockaddr.port());
-                    //send tcp_stream and src_addr_str to conn_task
-                    let result = sender.send( (tcp_stream, src_addr_str) ).await;
-                    match result {
-                        Ok(_) => {},
-                        Err(e) => {
-                            let msg = format!("listen error in tcp_listen_with_thread, error: {}", e);
-                            herrors::logger_error(&msg);
-                        }
-                    }
-                }
-                Err(e) => {
-                    let msg = format!("listen error in tcp_listen_with_thread, error: {}", e);
+            if let Ok(listen_result) = listener.accept().await {
+                let signal = Signal::new_listen_result(listen_result);
+                //make sure the other thread receive this signal
+                if let Err(e) = pipe.send(signal).await{
+                    let msg = format!("listen task have a send error in Pipe, error: {}", e);
                     herrors::logger_error(&msg);
+                }else {
+                    let msg = 
+                        format!("listen task have a new connection, and send it to conn_task, src_addr: {}:{}", 
+                            listen_result.1.ip(), listen_result.1.port());
+                    logger_info(&msg);
                 }
+            }else{ //error in accept
+                let msg = format!("listen task have a accept error");
+                herrors::logger_error(&msg);
             }
         }
     };
     tokio::spawn(liesten_task);
     Ok(())
 }
-        let conn_task = async move {
-            //deal with incoming connections
-            let conn_counter = Arc::new(Mutex::new(0));
-            let save_counter = 0;
-            loop{
-                let mut wait_times = 0;
-                if let Some((tcp_stream, src_addr_str)) = receiver.recv().await{
-                    //wait for some time until some connections are closed
-                    loop {
-                        //get the connection counter
-                        let counter = conn_counter.lock().await;
-                        let save_counter_old = save_counter;
-                        let save_counter = *counter;
-                        drop(counter);
 
-                        //can deal with new connections?
-                        if save_counter < MAX_CONNECTIONS {
-                            //yes, break the loop
-                            break;
-                        }else if save_counter > save_counter_old {
-                            //No, the counter still increase, wait for more time
-                            tokio::time::sleep(std::time::Duration::from_secs(wait_times) * 2).await;
-                        }else {
-                            //No, the counter is down, wait for a while
-                            tokio::time::sleep(std::time::Duration::from_secs(wait_times)).await;
-                        }
-                        wait_times += 1;
+async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>) -> Result<(), HError> {
+    let conn_task = async move {
+        //deal with incoming connections
+        let conn_counter = Arc::new(Mutex::new(0));
+        let save_counter = 0;
+        loop{
+            let mut wait_times = 0;
+            //wait for a signal from listen task. get the connection and source address
+            if let Ok(Signal::ListenResult(tcp_stream, src_addr_str)) 
+                = pipe.recv().await
+            {
+                //wait for some time until some connections are closed
+                loop {
+                    //get the connection counter
+                    let counter = conn_counter.lock().await;
+                    let save_counter_old = save_counter;
+                    let save_counter = *counter;
+                    drop(counter);
 
-                        //check if it is waiting too long
-                        if wait_times > 10 {
-                            return Err(
-                                HError::NetWork { message: format!("tcp connection is too many! waiting too long ") }
-                            );
-                        }
-                        //deal with this connection
-                        tokio::spawn(
-                            async  {
-
-
-                            }
-                        )
-
+                    //can deal with new connections?
+                    if save_counter < MAX_CONNECTIONS {
+                        //yes, break the loop
+                        break;
+                    }else if save_counter > save_counter_old {
+                        //No, the counter still increase, wait for more time
+                        tokio::time::sleep(std::time::Duration::from_secs(wait_times) * 2).await;
+                    }else {
+                        //No, the counter is down, wait for a while
+                        tokio::time::sleep(std::time::Duration::from_secs(wait_times)).await;
                     }
-                }else {
-                    return Err(
-                        HError::NetWork { 
-                            message: format!("tcp_listen_with_thread error, receiver error in the conn_task") 
-                        }
-                    );
-                }
+                    wait_times += 1;
 
+                    //check if it is waiting too long
+                    if wait_times > 10 {
+                        return Err::<(), HError>(
+                            HError::NetWork { message: format!("tcp connection is too many! waiting too long ") }
+                        );
+                    }
+                    //deal with this connection
+
+                }
+            }else {
+                return Err(
+                    HError::NetWork { 
+                        message: format!("tcp_listen_with_thread error, receiver error in the conn_task") 
+                    }
+                );
             }
-        };
-    }
-    
+
+        }
+    };
+    Ok(())
+}
+
 
 mod tests {
     use super::*;

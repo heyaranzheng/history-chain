@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use thiserror:: Error;
 use env_logger;
 use log;
@@ -56,11 +58,23 @@ pub enum HError {
 }
 
 ///for pipe 
+#[derive(Debug)]
 pub enum PipeError {
     Close,
     Full,
     Empty,
 }
+impl Display for PipeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PipeError::Close => write!(f, "Pipe closed"),
+            PipeError::Full => write!(f, "Pipe full"),
+            PipeError::Empty => write!(f, "Pipe empty"),
+        }
+    }
+}
+//for the bound requirement of std::error::Error
+impl std::error::Error for PipeError {}
 
 ///init logger for the project with default level, print from the level of "log::level::error".
 pub fn logger_init() {

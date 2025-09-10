@@ -95,14 +95,6 @@ impl Node for UserNode {
     fn is_center(&self) -> bool {
         false
     }
-    
-    //find a friend node's address by its name, return None if not found
-    fn get_friend_address(&self, name: HashValue) -> Result<Option<String>, HError> {
-        if let Some(friend) = self.friends.get(&name) {
-            return Ok(friend.address.clone());
-        }
-        return Err(HError::Message { message: format!("this friend not found") });
-    }
     #[inline]
     fn my_address(&self) -> Option<String> {
         self.address.clone()
