@@ -81,11 +81,33 @@ pub trait NetWork{
     }
 }
 
+async fn tcp_server_with_thread(cntl_pipe: Pipe<Signal>) {
+    let (listen_end, deal_conn_end) = Pipe::new(1);
+    let _ = tcp_listen_with_thread(listen_end, cntl_pipe);
+    let _ = tcp_conn_with_thread(deal_conn_end);
+}
+    
+
 ///create a new thread to listen tcp port for incoming connections
-async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
+async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>, mut cntl_pipe: Pipe<Signal>) -> Result<(), HError> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
     let liesten_task = async move {
         loop {
+            //try to get a signal from cntl_ pipe
+            if let Ok(Signal::Close) = cntl_pipe.try_recv() {
+                //we get a close signal, tell the conntion handler that we will close all the connections
+                if let Ok(_) = pipe.send(Signal::Close).await {
+                    let msg = format!(
+                        "get a close signal from cntl_pipe, we will close the listen task,
+                        and send a signal to dealers to close the connections successfully!");
+                    logger_info(msg);
+                }else {
+                    let msg = format!(
+                        "get a close signal from cntl_pipe, we will close the listen task,
+                        but send a signal to dealers to close the connections failed!");
+                    logger_error_with_error(msg);
+                }
+            }
             //if we get a close signal, break the loop, end the thread
             if let Ok(Signal::Close) = pipe.try_recv() {
                 break;
@@ -119,14 +141,18 @@ async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
     Ok(())
 }
 
-async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>, buf: &mut [u8]) -> Result<(), HError> {
+async fn tcp_handle_conn_with_thread(mut pipe: Pipe<Signal>, cntl_pipe: Pipe<Signal>) -> Result<(), HError> {
     tokio::spawn(async move {
-        recv_signal_and_deal(&mut pipe).await;
+        loop {
+            recv_signal_and_deal(&mut pipe).await;
+        }
     });
     Ok(())
 }
 
-async fn handle_signal_listen(tcp_stream:  TcpStream, src_addr: String) -> Result<(), HError>{
+///if we get a tcp_stream from listen_task, we create a new thread to deal with it.
+async fn handle_signal_listen(mut tcp_stream:  TcpStream, src_addr: String) -> Result<(), HError>{
+    
     //wait for some time until some connections are closed
     let conn_counter = Arc::new(Mutex::new(0));
     let save_counter = 0;
@@ -158,11 +184,12 @@ async fn handle_signal_listen(tcp_stream:  TcpStream, src_addr: String) -> Resul
             );
         }
     }
-    //deal with this connection
+    
+    //creat a new thread to deal with this connection
     tokio::spawn(async move {
         //resolute the request from client, and handle it.
         let result = 
-            message::resolute_message(tcp_stream).await;
+            message::resolute_message(&mut tcp_stream).await;
         if let Some(msg) = herrors::logger_result(result) {
             let result = message::handle_message(&msg);
             herrors::logger_result(result);
@@ -174,7 +201,7 @@ async fn handle_signal_listen(tcp_stream:  TcpStream, src_addr: String) -> Resul
 async fn recv_signal_and_deal(pipe: &mut Pipe<Signal>) {
     match pipe.recv().await {
         Ok(Signal::ListenResult(tcp_stream, src_addr)) => {
-            handle_signal_listen(tcp_stream, src_addr).await;
+            let _ =handle_signal_listen(tcp_stream, src_addr).await;
         }
         Ok(Signal::Close) => {
             return ;
@@ -186,12 +213,14 @@ async fn recv_signal_and_deal(pipe: &mut Pipe<Signal>) {
     }
 }
 
+async fn tcp
+
 mod tests {
     use super::*;
     use crate::{fpsc::new, message::MessageType};
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_udp() {
+    async fn test_network() {
         let msg = Message::new_with_zero();
         let save_msg = msg.clone();
         struct Test;
@@ -222,6 +251,13 @@ mod tests {
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();
         assert_eq!(save_msg, recv_msg);
         assert_eq!(src_addr, "127.0.0.1:8080"); 
+
+        //tcp testing
+        let (listen_pipe, conn_pipe) = 
+            Pipe::new(1);
+        let _ = tcp_listen_with_thread(listen_pipe);
+        let _ = tcp_conn_with_thread(conn_pipe);
+        
        
     }
 
