@@ -83,7 +83,6 @@ pub trait NetWork{
 ///create a new thread to listen tcp port for incoming connections
 async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
-    let (mut sender, mut receiver) = mpsc::channel(100);
     let liesten_task = async move {
         loop {
             //if we get a close signal, break the loop, end the thread
@@ -93,15 +92,20 @@ async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
 
             //accept incoming connections
             if let Ok(listen_result) = listener.accept().await {
+                //save the address
+                let save_addr = listen_result.1.clone();
+                //create a signal to send to conn_task
                 let signal = Signal::new_listen_result(listen_result);
                 //make sure the other thread receive this signal
                 if let Err(e) = pipe.send(signal).await{
+                    //failed to send signal, log the error
                     let msg = format!("listen task have a send error in Pipe, error: {}", e);
                     herrors::logger_error(&msg);
                 }else {
+                    //the signal is sent successfully, log the info
                     let msg = 
                         format!("listen task have a new connection, and send it to conn_task, src_addr: {}:{}", 
-                            listen_result.1.ip(), listen_result.1.port());
+                            save_addr.ip(), save_addr.port());
                     logger_info(&msg);
                 }
             }else{ //error in accept
@@ -114,8 +118,8 @@ async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
     Ok(())
 }
 
-async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>) -> Result<(), HError> {
-    let conn_task = async move {
+async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>, buf: &mut [u8]) -> Result<(), HError> {
+    let task = async move {
         //deal with incoming connections
         let conn_counter = Arc::new(Mutex::new(0));
         let save_counter = 0;
@@ -153,6 +157,10 @@ async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>) -> Result<(), HError> {
                         );
                     }
                     //deal with this connection
+                    tokio::spawn(async move {
+                        //resolute the request from client
+                        
+                    });
 
                 }
             }else {
@@ -169,12 +177,47 @@ async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>) -> Result<(), HError> {
 }
 
 
+
 mod tests {
     use super::*;
-    use crate::message::MessageType;
+    use crate::{fpsc::new, message::MessageType};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {
+        let msg = Message::new_with_zero();
+        let save_msg = msg.clone();
+        struct Test;
+
+        impl NetWork for Test {
+            fn get_friend_address(&self,name:HashValue) -> Result<Option<String> ,HError> {
+                Ok(None)
+            }
+            fn my_address(&self) -> Option<String> {
+                Some( "127.0.0.1:8080".to_string())
+            }
+        }
+        let test = Test;
+        let dst_addr = "127.0.0.1:8081".to_string();
+        let send_task = async move {
+            test.udp_send_to(dst_addr, &msg).await.unwrap();
+        };
+        let test = Test;
+        
+        use tokio::sync::mpsc;
+        let (sender, mut receiver) = mpsc::channel(1);
+        let recv_task = async move {
+            let (msg, src_addr) = test.udp_recv_from().await.unwrap();
+            sender.send( (msg, src_addr)).await.unwrap();
+        };
+        tokio::spawn(send_task);
+        tokio::spawn(recv_task);
+        let (recv_msg, src_addr) = receiver.recv().await.unwrap();
+        assert_eq!(save_msg, recv_msg);
+        assert_eq!(src_addr, "127.0.0.1:8080");
+
+
+
+        
        
     }
 }

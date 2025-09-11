@@ -63,11 +63,10 @@ pub async fn resolute_message<S> (stream: &mut S) -> Result<Message, HError>
     let mut buf: [u8; MAX_MSG_SIZE] = unsafe { MaybeUninit::uninit().assume_init()};
     let n = stream.read(&mut buf[..]).await?;
     let msg = Message::decode_from_slice(&buf[..n])?;
-
     Ok(msg)
 }
 
-pub fn match_message_type (msg: &Message) -> Result<(), HError>
+pub fn handle_message(msg: &Message) -> Result<(), HError>
 {
     match &msg.message_type {
         MessageType::BlockRecitify(block_rec) => {
@@ -93,6 +92,8 @@ pub fn match_message_type (msg: &Message) -> Result<(), HError>
     }
 
 }
+
+
 
 
 ///A message that can be sent between nodes in the network.
