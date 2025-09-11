@@ -128,6 +128,21 @@ pub fn logger_debug_with_error(error: &HError) {
     log::debug!("{:?}", error);
 }
 
+pub fn logger_result<T>(result: Result<T, HError>) -> Option<T>
+    where T: std::fmt::Debug,
+{
+    match result {
+        Ok(value) => {
+            let msg = format!("result: Ok({:?})", value);
+            logger_debug(msg.as_str());
+            Some(value)
+        }
+        Err(error) => {
+            logger_error_with_error(&error);
+            None
+        }
+    }
+}
 
 
 #[cfg(test)]

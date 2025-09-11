@@ -12,6 +12,7 @@ use crate::herrors;
 use crate::herrors::HError;
 use crate::herrors::logger_error_with_error;
 use crate::herrors::logger_info;
+use crate::message;
 use crate::message::Message;
 use crate::hash:: {HashValue, Hasher};
 use crate::nodes::UserNode;
@@ -119,64 +120,71 @@ async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>) -> Result<(), HError> {
 }
 
 async fn tcp_conn_with_thread(mut pipe: Pipe<Signal>, buf: &mut [u8]) -> Result<(), HError> {
-    let task = async move {
-        //deal with incoming connections
-        let conn_counter = Arc::new(Mutex::new(0));
-        let save_counter = 0;
-        loop{
-            let mut wait_times = 0;
-            //wait for a signal from listen task. get the connection and source address
-            if let Ok(Signal::ListenResult(tcp_stream, src_addr_str)) 
-                = pipe.recv().await
-            {
-                //wait for some time until some connections are closed
-                loop {
-                    //get the connection counter
-                    let counter = conn_counter.lock().await;
-                    let save_counter_old = save_counter;
-                    let save_counter = *counter;
-                    drop(counter);
-
-                    //can deal with new connections?
-                    if save_counter < MAX_CONNECTIONS {
-                        //yes, break the loop
-                        break;
-                    }else if save_counter > save_counter_old {
-                        //No, the counter still increase, wait for more time
-                        tokio::time::sleep(std::time::Duration::from_secs(wait_times) * 2).await;
-                    }else {
-                        //No, the counter is down, wait for a while
-                        tokio::time::sleep(std::time::Duration::from_secs(wait_times)).await;
-                    }
-                    wait_times += 1;
-
-                    //check if it is waiting too long
-                    if wait_times > 10 {
-                        return Err::<(), HError>(
-                            HError::NetWork { message: format!("tcp connection is too many! waiting too long ") }
-                        );
-                    }
-                    //deal with this connection
-                    tokio::spawn(async move {
-                        //resolute the request from client
-                        
-                    });
-
-                }
-            }else {
-                return Err(
-                    HError::NetWork { 
-                        message: format!("tcp_listen_with_thread error, receiver error in the conn_task") 
-                    }
-                );
-            }
-
-        }
-    };
+    tokio::spawn(async move {
+        recv_signal_and_deal(&mut pipe).await;
+    });
     Ok(())
 }
 
+async fn handle_signal_listen(tcp_stream:  TcpStream, src_addr: String) -> Result<(), HError>{
+    //wait for some time until some connections are closed
+    let conn_counter = Arc::new(Mutex::new(0));
+    let save_counter = 0;
+    let mut wait_times = 0;
+    loop {
+        //get the connection counter
+        let counter = conn_counter.lock().await;
+        let save_counter_old = save_counter;
+        let save_counter = *counter;
+        drop(counter);
 
+        //can deal with new connections?
+        if save_counter < MAX_CONNECTIONS {
+            //yes, break the loop
+            break;
+        }else if save_counter > save_counter_old {
+            //No, the counter still increase, wait for more time
+            tokio::time::sleep(std::time::Duration::from_secs(wait_times) * 2).await;
+        }else {
+            //No, the counter is down, wait for a while
+            tokio::time::sleep(std::time::Duration::from_secs(wait_times)).await;
+        }
+        wait_times += 1;
+
+        //check if it is waiting too long
+        if wait_times > 10 {
+            return Err::<(), HError>(
+                HError::NetWork { message: format!("tcp connection is too many! waiting too long ") }
+            );
+        }
+    }
+    //deal with this connection
+    tokio::spawn(async move {
+        //resolute the request from client, and handle it.
+        let result = 
+            message::resolute_message(tcp_stream).await;
+        if let Some(msg) = herrors::logger_result(result) {
+            let result = message::handle_message(&msg);
+            herrors::logger_result(result);
+        }
+    });
+    Ok(())
+}
+
+async fn recv_signal_and_deal(pipe: &mut Pipe<Signal>) {
+    match pipe.recv().await {
+        Ok(Signal::ListenResult(tcp_stream, src_addr)) => {
+            handle_signal_listen(tcp_stream, src_addr).await;
+        }
+        Ok(Signal::Close) => {
+            return ;
+        }
+        Err(e) => {
+            herrors::logger_error(&format!("pipe recv error: {}", e));
+            return
+        }
+    }
+}
 
 mod tests {
     use super::*;
@@ -213,11 +221,8 @@ mod tests {
         tokio::spawn(recv_task);
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();
         assert_eq!(save_msg, recv_msg);
-        assert_eq!(src_addr, "127.0.0.1:8080");
-
-
-
-        
+        assert_eq!(src_addr, "127.0.0.1:8080"); 
        
     }
+
 }
