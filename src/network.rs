@@ -1,9 +1,10 @@
 use tokio::net::{TcpStream, UdpSocket, TcpListener};
 use std::net::SocketAddr;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync:: {Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::constants::{
     MAX_CONNECTIONS , UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, 
@@ -25,7 +26,7 @@ pub enum Signal {
 }
 impl Signal {
     ///create a new listen result signal
-    fn new_listen_result( listen_result: (TcpStream, SocketAddr)) -> Self {
+    fn from_accept_result( listen_result: (TcpStream, SocketAddr)) -> Self {
         let sockaddr_str = format!("{}:{}", listen_result.1.ip(), listen_result.1.port());
         Self::ListenResult(listen_result.0, sockaddr_str)
     }
@@ -81,77 +82,64 @@ pub trait NetWork{
     }
 }
 
-async fn tcp_server_with_thread(cntl_pipe: Pipe<Signal>) {
-    let (listen_end, deal_conn_end) = Pipe::new(1);
-    let _ = tcp_listen_with_thread(listen_end, cntl_pipe);
-    let _ = tcp_conn_with_thread(deal_conn_end);
-}
-    
 
 ///create a new thread to listen tcp port for incoming connections
-async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>, mut cntl_pipe: Pipe<Signal>) -> Result<(), HError> {
+async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>, cancle_token: CancellationToken) -> Result<(),HError> {
     let listener = TcpListener::bind(format!("0.0.0.0:{}", TCP_RECV_PORT)).await?;
-    let liesten_task = async move {
+    tokio::spawn( async move {
         loop {
-            //try to get a signal from cntl_ pipe
-            if let Ok(Signal::Close) = cntl_pipe.try_recv() {
-                //we get a close signal, tell the conntion handler that we will close all the connections
-                if let Ok(_) = pipe.send(Signal::Close).await {
-                    let msg = format!(
-                        "get a close signal from cntl_pipe, we will close the listen task,
-                        and send a signal to dealers to close the connections successfully!");
-                    logger_info(msg);
-                }else {
-                    let msg = format!(
-                        "get a close signal from cntl_pipe, we will close the listen task,
-                        but send a signal to dealers to close the connections failed!");
-                    logger_error_with_error(msg);
+            tokio::select! {
+                _  = cancle_token.cancelled() => {
+                    //if we get a cancel signal, close the listener
+                    let msg = format!("tcp listen task is closed");
+                    herrors::logger_info(&msg);
+                    break;
+                },
+                //accept incoming connections
+                accept_result = listener.accept() => {
+                    match accept_result {
+                        Ok(result) => {
+                            let save_addr = result.1.to_string();
+                            let signal = Signal::from_accept_result(result);
+
+                            //send the signal to deal_conn_task
+                            if let Err(e) = pipe.send(signal).await{
+                                //failed to send signal, log the error
+                                let msg = format!("listen task have a send error in Pipe, error: {}", e);
+                                herrors::logger_error(&msg);
+                                
+                                //error, close the all connection
+                                cancle_token.cancel();
+                            }else {
+                            //the signal is sent successfully, log the info
+                                let msg = 
+                                    format!("listen task have a new connection, and send it to conn_task, src_addr: {}", 
+                                    save_addr);
+                                logger_info(&msg);
+                            }
+                            
+                        }
+                        Err(e) => {
+                            //print the error and close all connections
+                            logger_error_with_error(&HError::IO(e));
+                            cancle_token.cancel();
+                        }
+
+                    }
+                    
                 }
             }
-            //if we get a close signal, break the loop, end the thread
-            if let Ok(Signal::Close) = pipe.try_recv() {
-                break;
-            }
-
-            //accept incoming connections
-            if let Ok(listen_result) = listener.accept().await {
-                //save the address
-                let save_addr = listen_result.1.clone();
-                //create a signal to send to conn_task
-                let signal = Signal::new_listen_result(listen_result);
-                //make sure the other thread receive this signal
-                if let Err(e) = pipe.send(signal).await{
-                    //failed to send signal, log the error
-                    let msg = format!("listen task have a send error in Pipe, error: {}", e);
-                    herrors::logger_error(&msg);
-                }else {
-                    //the signal is sent successfully, log the info
-                    let msg = 
-                        format!("listen task have a new connection, and send it to conn_task, src_addr: {}:{}", 
-                            save_addr.ip(), save_addr.port());
-                    logger_info(&msg);
-                }
-            }else{ //error in accept
-                let msg = format!("listen task have a accept error");
-                herrors::logger_error(&msg);
-            }
-        }
-    };
-    tokio::spawn(liesten_task);
-    Ok(())
-}
-
-async fn tcp_handle_conn_with_thread(mut pipe: Pipe<Signal>, cntl_pipe: Pipe<Signal>) -> Result<(), HError> {
-    tokio::spawn(async move {
-        loop {
-            recv_signal_and_deal(&mut pipe).await;
         }
     });
-    Ok(())
+   Ok(())
 }
 
+
+
 ///if we get a tcp_stream from listen_task, we create a new thread to deal with it.
-async fn handle_signal_listen(mut tcp_stream:  TcpStream, src_addr: String) -> Result<(), HError>{
+async fn handle_accepted_conn(mut tcp_stream:  TcpStream, src_addr: String, cancle: CancellationToken)
+     -> Result<(), HError>
+{
     
     //wait for some time until some connections are closed
     let conn_counter = Arc::new(Mutex::new(0));
@@ -185,35 +173,65 @@ async fn handle_signal_listen(mut tcp_stream:  TcpStream, src_addr: String) -> R
         }
     }
     
-    //creat a new thread to deal with this connection
+    //creat a new task to deal with this connection
     tokio::spawn(async move {
         //resolute the request from client, and handle it.
         let result = 
             message::resolute_message(&mut tcp_stream).await;
         if let Some(msg) = herrors::logger_result(result) {
-            let result = message::handle_message(&msg);
-            herrors::logger_result(result);
+            tokio::select! {
+                //if we get a cancel signal, close the connection
+                _ = cancle.cancelled() => {
+                    let msg = format!("connection is closed, src_addr: {}", src_addr);
+                    tcp_stream.shutdown().await.unwrap();
+                    herrors::logger_info(&msg);
+                }
+                //everything is ok, handle the message
+                result = message::handle_message(&msg) => {
+                    herrors::logger_result(result);
+                }
+            }
         }
     });
     Ok(())
 }
 
-async fn recv_signal_and_deal(pipe: &mut Pipe<Signal>) {
+async fn recv_accepted_conn_and_deal(pipe: &mut Pipe<Signal>, cancle: CancellationToken) {
+    let clone_token = cancle.clone();
     match pipe.recv().await {
         Ok(Signal::ListenResult(tcp_stream, src_addr)) => {
-            let _ =handle_signal_listen(tcp_stream, src_addr).await;
+            let _ = handle_accepted_conn(tcp_stream, src_addr, clone_token).await;
         }
         Ok(Signal::Close) => {
+            //if we get a close signal, close the connection
+            cancle.cancel();
             return ;
         }
         Err(e) => {
+            //something wrong with the pipe, log the error, and close the connection
+            cancle.cancel();
             herrors::logger_error(&format!("pipe recv error: {}", e));
             return
         }
     }
 }
 
-async fn tcp
+async fn tcp_handle_accepted_with_thread(mut pipe: Pipe<Signal>, cancle_token: CancellationToken) 
+-> Result<(), HError> {
+    tokio::spawn(async move {
+        loop {
+            recv_accepted_conn_and_deal(&mut pipe, cancle_token.clone()).await;
+        }
+    });
+    Ok(())
+}
+
+async fn tcp_server_with_new_thread() {
+    let (listen_end, deal_conn_end) = Pipe::new(1);
+    let cancel_token = CancellationToken::new();
+    let _ = tcp_listen_with_thread(listen_end, cancel_token.clone());
+    let _ = tcp_handle_accepted_with_thread(deal_conn_end, cancel_token.clone());
+}
 
 mod tests {
     use super::*;
@@ -253,11 +271,7 @@ mod tests {
         assert_eq!(src_addr, "127.0.0.1:8080"); 
 
         //tcp testing
-        let (listen_pipe, conn_pipe) = 
-            Pipe::new(1);
-        let _ = tcp_listen_with_thread(listen_pipe);
-        let _ = tcp_conn_with_thread(conn_pipe);
-        
+     
        
     }
 

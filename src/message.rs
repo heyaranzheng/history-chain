@@ -3,6 +3,7 @@ use std::mem::MaybeUninit;
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
 use crate::chain::NomalChain;
@@ -66,11 +67,10 @@ pub async fn resolute_message<S> (stream: &mut S) -> Result<Message, HError>
     Ok(msg)
 }
 
-pub fn handle_message(msg: &Message) -> Result<(), HError>
+pub async fn handle_message(msg: &Message) -> Result<(), HError>
 {
     match &msg.message_type {
         MessageType::BlockRecitify(block_rec) => {
-            //TO DO
             println!("BlockRecitify: {:?}", block_rec);
             Ok(())
         }
