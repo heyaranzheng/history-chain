@@ -1,4 +1,5 @@
 use std::mem::MaybeUninit;
+use std::task::ready;
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,30 @@ pub async fn handle_message(msg: &Message) -> Result<(), HError>
         }
     }
 
+}
+
+pub async fn client_handle_message(msg: &Message) -> Result<(), HError> {
+    match &msg.message_type {
+        MessageType::BlockRecitify(block_rec) => {
+            println!("Client BlockRecitify: {:?}", block_rec);
+            Ok(())
+        }
+        MessageType::ChainRequest(timestamp) => {
+            //TO DO
+            println!("Client ChainRequest: {:?}", timestamp);
+            Ok(())
+        }
+        MessageType::VoteBlock(chain) => {
+            //TO DO
+            println!("Client VoteBlock: {:?}", chain);
+            Ok(())
+        }
+        MessageType::SearchFriend(name) => {
+            //TO DO
+            println!("Client SearchFriend: {:?}", name);
+            Ok(())
+        }
+    }
 }
 
 

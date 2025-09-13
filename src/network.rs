@@ -1,5 +1,6 @@
 use tokio::net::{TcpStream, UdpSocket, TcpListener};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpStream};
+use std::thread::spawn;
 use async_trait::async_trait;
 use tokio::sync:: {Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -13,7 +14,7 @@ use crate::herrors;
 use crate::herrors::HError;
 use crate::herrors::logger_error_with_error;
 use crate::herrors::logger_info;
-use crate::message;
+use crate::message::{self, client_handle_message};
 use crate::message::Message;
 use crate::hash:: {HashValue, Hasher};
 use crate::nodes::UserNode;
@@ -233,6 +234,15 @@ async fn tcp_server_with_new_thread() {
     let _ = tcp_handle_accepted_with_thread(deal_conn_end, cancel_token.clone());
 }
 
+   
+
+async fn tcp_client_with_new_thread(addr_str: String, msg: Message) {
+    spawn(async move{
+        let tcp_stream = TcpStream::connect(addr_str).await.unwrap();
+        let  _ = client_handle_message(&msg).await;
+    });
+ }
+
 mod tests {
     use super::*;
     use crate::{fpsc::new, message::MessageType};
@@ -271,7 +281,14 @@ mod tests {
         assert_eq!(src_addr, "127.0.0.1:8080"); 
 
         //tcp testing
-     
+        let msg = save_msg.clone();
+        spawn( aysnc {
+            tcp_server_with_new_thread();
+        });
+        spawn( async  {
+            addr_str = "127.0.0.1:8080".to_string();
+            tcp_client_with_new_thread(addr_str, msg)
+        })
        
     }
 
