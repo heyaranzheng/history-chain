@@ -1,4 +1,11 @@
+<<<<<<< HEAD:src/network/tcp.rs
 use tokio::net::{TcpStream, TcpListener};
+=======
+use tokio::net::{TcpStream, UdpSocket, TcpListener};
+use std::net::{SocketAddr, TcpStream};
+use std::thread::spawn;
+use async_trait::async_trait;
+>>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
 use tokio::sync:: {Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
@@ -8,7 +15,16 @@ use crate::constants::{MAX_CONNECTIONS};
 use crate::constants::{TCP_RECV_PORT};
 use crate::herrors;
 use crate::herrors::HError;
+<<<<<<< HEAD:src/network/tcp.rs
 use crate::message::{self, Message };
+=======
+use crate::herrors::logger_error_with_error;
+use crate::herrors::logger_info;
+use crate::message::{self, client_handle_message};
+use crate::message::Message;
+use crate::hash:: {HashValue, Hasher};
+use crate::nodes::UserNode;
+>>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
 use crate::pipe::Pipe;
 use crate::network::signal::Signal;
 
@@ -164,6 +180,68 @@ async fn tcp_server_with_new_thread() {
     let _ = tcp_handle_accepted_with_thread(deal_conn_end, cancel_token.clone());
 }
 
+<<<<<<< HEAD:src/network/tcp.rs
 async fn tcp_connect_with_new_thread(dst_addr: String, msg: &Message) -> Result<TcpStream, HError> {
     
 }
+=======
+   
+
+async fn tcp_client_with_new_thread(addr_str: String, msg: Message) {
+    spawn(async move{
+        let tcp_stream = TcpStream::connect(addr_str).await.unwrap();
+        let  _ = client_handle_message(&msg).await;
+    });
+ }
+
+mod tests {
+    use super::*;
+    use crate::{fpsc::new, message::MessageType};
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_network() {
+        let msg = Message::new_with_zero();
+        let save_msg = msg.clone();
+        struct Test;
+
+        impl NetWork for Test {
+            fn get_friend_address(&self,name:HashValue) -> Result<Option<String> ,HError> {
+                Ok(None)
+            }
+            fn my_address(&self) -> Option<String> {
+                Some( "127.0.0.1:8080".to_string())
+            }
+        }
+        let test = Test;
+        let dst_addr = "127.0.0.1:8081".to_string();
+        let send_task = async move {
+            test.udp_send_to(dst_addr, &msg).await.unwrap();
+        };
+        let test = Test;
+        
+        use tokio::sync::mpsc;
+        let (sender, mut receiver) = mpsc::channel(1);
+        let recv_task = async move {
+            let (msg, src_addr) = test.udp_recv_from().await.unwrap();
+            sender.send( (msg, src_addr)).await.unwrap();
+        };
+        tokio::spawn(send_task);
+        tokio::spawn(recv_task);
+        let (recv_msg, src_addr) = receiver.recv().await.unwrap();
+        assert_eq!(save_msg, recv_msg);
+        assert_eq!(src_addr, "127.0.0.1:8080"); 
+
+        //tcp testing
+        let msg = save_msg.clone();
+        spawn( aysnc {
+            tcp_server_with_new_thread();
+        });
+        spawn( async  {
+            addr_str = "127.0.0.1:8080".to_string();
+            tcp_client_with_new_thread(addr_str, msg)
+        })
+       
+    }
+
+}
+>>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
