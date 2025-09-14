@@ -1,34 +1,27 @@
-<<<<<<< HEAD:src/network/tcp.rs
 use tokio::net::{TcpStream, TcpListener};
-=======
-use tokio::net::{TcpStream, UdpSocket, TcpListener};
-use std::net::{SocketAddr, TcpStream};
-use std::thread::spawn;
-use async_trait::async_trait;
->>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
-use tokio::sync:: {Mutex, mpsc};
+use tokio::sync:: {Mutex, };
 use tokio_util::sync::CancellationToken;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::net::SocketAddr;
 
-use crate::constants::{MAX_CONNECTIONS};
-use crate::constants::{TCP_RECV_PORT};
+use crate::constants::{TCP_RECV_PORT, MAX_CONNECTIONS};
 use crate::herrors;
 use crate::herrors::HError;
-<<<<<<< HEAD:src/network/tcp.rs
-use crate::message::{self, Message };
-=======
-use crate::herrors::logger_error_with_error;
-use crate::herrors::logger_info;
-use crate::message::{self, client_handle_message};
-use crate::message::Message;
-use crate::hash:: {HashValue, Hasher};
-use crate::nodes::UserNode;
->>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
 use crate::pipe::Pipe;
 use crate::network::signal::Signal;
 
 
+#[async_trait::async_trait]
+pub trait TcpConnection {
+    async fn listen <T> (&mut self, server_addr: String) -> Result<TcpListener, HError>;
+    async fn accept(&mut self, listener: &mut TcpListener) -> Result<(TcpStream, SocketAddr), HError>;
+    async fn client(&mut self, dst_addr: String, data: & mut [u8]) -> Result<TcpStream, HError>;
+}
+
+ 
+
+/* 
 
 ///create a new thread to listen tcp port for incoming connections
 async fn tcp_listen_with_thread( mut pipe: Pipe<Signal>, cancle_token: CancellationToken) -> Result<(),HError> {
@@ -124,7 +117,7 @@ async fn handle_accepted_conn(mut tcp_stream:  TcpStream, src_addr: String, canc
     tokio::spawn(async move {
         //resolute the request from client, and handle it.
         let result = 
-            message::resolute_message(&mut tcp_stream).await;
+            protocol::resolute_message(&mut tcp_stream).await;
         if let Some(msg) = herrors::logger_result(result) {
             tokio::select! {
                 //if we get a cancel signal, close the connection
@@ -134,7 +127,7 @@ async fn handle_accepted_conn(mut tcp_stream:  TcpStream, src_addr: String, canc
                     herrors::logger_info(&msg);
                 }
                 //everything is ok, handle the message
-                result = message::handle_message(&msg) => {
+                result = protocol::handle(&msg) => {
                     herrors::logger_result(result);
                 }
             }
@@ -180,23 +173,10 @@ async fn tcp_server_with_new_thread() {
     let _ = tcp_handle_accepted_with_thread(deal_conn_end, cancel_token.clone());
 }
 
-<<<<<<< HEAD:src/network/tcp.rs
-async fn tcp_connect_with_new_thread(dst_addr: String, msg: &Message) -> Result<TcpStream, HError> {
-    
-}
-=======
-   
-
-async fn tcp_client_with_new_thread(addr_str: String, msg: Message) {
-    spawn(async move{
-        let tcp_stream = TcpStream::connect(addr_str).await.unwrap();
-        let  _ = client_handle_message(&msg).await;
-    });
- }
 
 mod tests {
     use super::*;
-    use crate::{fpsc::new, message::MessageType};
+    use crate::{fpsc::new, protocol::MessageType};
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
@@ -244,4 +224,4 @@ mod tests {
     }
 
 }
->>>>>>> 6fbc8f2db41b4a20b574f52018999e8dafccefa7:src/network.rs
+*/

@@ -1,15 +1,18 @@
 use std::mem::MaybeUninit;
-use std::task::ready;
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
+use async_trait::async_trait;
 
 use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
 use crate::chain::NomalChain;
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
+use crate::network::Network;
+use crate::network::udp::UdpConnection;
+use crate::network::tcp::TcpConnection;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub enum MessageType {
@@ -68,58 +71,6 @@ pub async fn resolute_message<S> (stream: &mut S) -> Result<Message, HError>
     Ok(msg)
 }
 
-pub async fn handle_message(msg: &Message) -> Result<(), HError>
-{
-    match &msg.message_type {
-        MessageType::BlockRecitify(block_rec) => {
-            println!("BlockRecitify: {:?}", block_rec);
-            Ok(())
-        }
-        MessageType::ChainRequest(timestamp) => {
-            //TO DO
-            println!("ChainRequest: {:?}", timestamp);
-            Ok(())
-        }
-        MessageType::VoteBlock(chain) => {
-            //TO DO
-            println!("VoteBlock: {:?}", chain);
-            Ok(())
-        }
-        MessageType::SearchFriend(name) => {
-            //TO DO
-            println!("SearchFriend: {:?}", name);
-            Ok(())
-        }
-    }
-
-}
-
-pub async fn client_handle_message(msg: &Message) -> Result<(), HError> {
-    match &msg.message_type {
-        MessageType::BlockRecitify(block_rec) => {
-            println!("Client BlockRecitify: {:?}", block_rec);
-            Ok(())
-        }
-        MessageType::ChainRequest(timestamp) => {
-            //TO DO
-            println!("Client ChainRequest: {:?}", timestamp);
-            Ok(())
-        }
-        MessageType::VoteBlock(chain) => {
-            //TO DO
-            println!("Client VoteBlock: {:?}", chain);
-            Ok(())
-        }
-        MessageType::SearchFriend(name) => {
-            //TO DO
-            println!("Client SearchFriend: {:?}", name);
-            Ok(())
-        }
-    }
-}
-
-
-
 
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
@@ -169,8 +120,90 @@ impl Message {
 
 unsafe impl Send for Message {}
 
+pub async fn handle(msg: &Message) -> Result<(), HError>
+{
+    match &msg.message_type {
+        MessageType::BlockRecitify(block_rec) => {
+            println!("BlockRecitify: {:?}", block_rec);
+            Ok(())
+        }
+        MessageType::ChainRequest(timestamp) => {
+            //TO DO
+            println!("ChainRequest: {:?}", timestamp);
+            Ok(())
+        }
+        MessageType::VoteBlock(chain) => {
+            //TO DO
+            println!("VoteBlock: {:?}", chain);
+            Ok(())
+        }
+        MessageType::SearchFriend(name) => {
+            //TO DO
+            println!("SearchFriend: {:?}", name);
+            Ok(())
+        }
+    }
+
+}
+
+///a handler for network messages.
+#[async_trait]
+trait Handler
+    where Self: Send  +  UdpConnection + TcpConnection 
+{
+    fn handle_block_recitify(&self, msg: Message) -> Result<(), HError>;
+    fn handle_chain_request(&self, msg: Message) -> Result<(), HError>;
+    fn handle_vote_block(&self, msg: Message) -> Result<(), HError>;
+    fn handle_search_friend(&self, msg: Message) -> Result<(), HError>;
+}
 
 
+pub struct MessageHandler {
+}
+
+#[async_trait]
+impl Handler for MessageHandler {
+    fn handle_block_recitify(&self, msg: Message) -> Result<(), HError> {
+        //TO DO
+        Ok(())
+    }
+    fn handle_chain_request(&self, msg: Message) -> Result<(), HError> {
+        //TO DO
+        Ok(())
+    }
+    fn handle_vote_block(&self, msg: Message) -> Result<(), HError> {
+        //TO DO
+        Ok(())
+    }
+    fn handle_search_friend(&self, msg: Message) -> Result<(), HError> {
+        //TO DO
+        Ok(())
+    }
+}
+
+
+
+impl MessageHandler {
+    pub fn new() -> Self {
+        Self {}
+    }
+    pub async  fn handle(&self, msg: Message) -> Result<(), HError> {
+        match msg.message_type {
+            MessageType::BlockRecitify(_) => {
+                self.handle_block_recitify(msg).await
+            }
+            MessageType::ChainRequest(_) => {
+                self.handle_chain_request(msg).await    
+            }    
+            MessageType::VoteBlock(_) => {
+                self.handle_vote_block(msg).await
+            }
+            MessageType::SearchFriend(_) => {
+                self.handle_search_friend(msg).await
+            }
+        }
+    }
+}
 
 
 mod tests {
@@ -185,7 +218,4 @@ mod tests {
 
         assert_eq!(msg, decoded);
     }
-
-
-
 }

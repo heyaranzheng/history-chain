@@ -13,7 +13,7 @@ use crate::constants::{
     MAX_CONNECTIONS , UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, 
     TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
 use crate::herrors::HError;
-use crate::message::{Message, MessageType};
+use crate::network::protocol::{Message, MessageType};
 use crate::hash:: {HashValue, Hasher};
 
 
@@ -109,7 +109,7 @@ impl Node for UserNode {
 
 mod tests {
     use super::*;
-    use crate::message::MessageType;
+    use crate::network::protocol::MessageType;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {
