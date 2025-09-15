@@ -1,23 +1,114 @@
 use std::mem::MaybeUninit;
+use std::net::{SocketAddr};
 
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite,};
+use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 use async_trait::async_trait;
 
 use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
-use crate::chain::NomalChain;
+use crate::chain::{Chain, NomalChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
-use crate::network::Network;
-use crate::network::udp::UdpConnection;
-use crate::network::tcp::TcpConnection;
+use crate::pipe::Pipe;
+use crate::block::{Block};
+
+///This is the header of stream, when we create a connection by tcp.
+#[derive(Serialize, Deserialize, Debug, Decode, Encode, PartialEq)]
+struct Header {
+    //the total size of the data we will get from the stream. 4 bytes.
+    length: u32,
+    //the signature of the data, 32 bytes.
+    signature: HashValue,
+}
+impl Header {
+    fn new(length: u32, signature: HashValue) -> Self {
+        Self { length, signature }
+    }
+    fn enocde_to_vec(&self, data: &[u8]) -> Result<Vec<u8>, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //encode the header to a vec
+        let vec = bincode::encode_to_vec(data, config)
+           .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+        Ok(vec)
+    }
+    fn encode_into_slice(&self, data: &[u8], buffer: &mut [u8]) -> Result<usize, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //encode the header to a vec
+        let vec = bincode::encode_into_slice(data, buffer, config)
+            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+        Ok(vec)
+    }
+    fn decode_from_slice(&self, data: &[u8]) -> Result<Vec<u8>, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //decode the header from a vec 
+        let result = 
+            bincode::decode_from_slice::<Vec<u8>, _>(data, config)
+            .map_err(|e| HError::Message { message: format!("decode error in header: {:?}", e) })?;
+        Ok(result.0)
+    }
+    //extract the header from the stream
+    async fn get_header_from_stream <T> (&self, stream:&mut T) -> Result<Header, HError> 
+        where T: AsyncReadExt + Unpin,
+    {
+        //read the first 4 + 32 bytes of the stream, which is the length and signature of the data.
+        let header_enc = [0u8; 4 + 32];
+        let _ = stream.read_exact(&mut header_enc[..]).await?;
+
+        let length: u32 = self.decode_from_slice(& header_enc[..4])?.into();
+        let signature:[u8; 32] = self.decode_from_slice(& header_enc[4..])?.into();
+
+        let header = Header::new(length, signature);
+        Ok(header)
+    }
+    //add the header to the stream
+    async fn add_header_into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
+        where T: AsyncWrite + Unpin,
+    {
+        let header_enc = Vec::<u8>::with_capacity(4 + 32);
+
+        //encode the header to a vec
+        let length_u8 = self.length.to_be_bytes();
+        let signature_u8 = self.signature.to_vec();
+        let _ = self.encode_into_slice(&length_u8[..], &mut header_enc[..4])?;
+        let _ = self.encode_into_slice(&signature_u8[..], &mut header_enc[4..])?;
+        
+        //check the size of the header_encoded
+        if header_enc.len() != 32 + 4 {
+            return Err(HError::Message { message: "header size error".to_string() });
+        };
+
+        //write the header to the stream
+        stream.write_all(&header_enc[..]).await?;
+     
+        Ok(())
+    }
+    fn caculate_encode_size(&self, data: &[u8]) -> Result<usize, HError> {
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //create a size_writer as a encoder to calculate the serialized size of the data.
+        let mut size_writer = bincode::enc::write::SizeWriter::default();
+        let encoder = 
+            bincode::enc::EncoderImpl::new(size_writer, config);
+        bincode::encode_into_std_write(data, size_writer, config);
+        let size = size_writer.bytes_written;
+        Ok(size)
+    }
+}
+
+
 
 #[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
 pub enum MessageType {
     ///request for history chain, with a timestamp bigger than the given one
-    ChainRequest(u64),
+    ChainRequest (RequestInfo),
+    ///response for history chain, with a timestamp bigger than the given one
+    ChainResponse(NomalChain<dyn Block>),
     ///vote for a block if the block's validity is suspected.
     VoteBlock(NomalChain<VoteBlock>),
     ///if the vote report show that the block is invalid, the data of the block keeped should be
@@ -26,6 +117,13 @@ pub enum MessageType {
     ///serch friends, HashValue is the name of the node that want to search for friends.
     SearchFriend(HashValue),
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
+pub struct RequestInfo {
+    src_addr: String,
+    timestamp: u64,
+}
+
 
 unsafe impl Send for MessageType {}
 
@@ -90,7 +188,8 @@ impl Message {
         Self {
             sender: ZERO_HASH,
             timestamp: 0,
-            message_type: MessageType::ChainRequest(0),
+            message_type: 
+                MessageType::ChainRequest(RequestInfo{src_addr: "".to_string(), timestamp: 0}),
             receiver: ZERO_HASH,  
         }
     }
@@ -120,36 +219,10 @@ impl Message {
 
 unsafe impl Send for Message {}
 
-pub async fn handle(msg: &Message) -> Result<(), HError>
-{
-    match &msg.message_type {
-        MessageType::BlockRecitify(block_rec) => {
-            println!("BlockRecitify: {:?}", block_rec);
-            Ok(())
-        }
-        MessageType::ChainRequest(timestamp) => {
-            //TO DO
-            println!("ChainRequest: {:?}", timestamp);
-            Ok(())
-        }
-        MessageType::VoteBlock(chain) => {
-            //TO DO
-            println!("VoteBlock: {:?}", chain);
-            Ok(())
-        }
-        MessageType::SearchFriend(name) => {
-            //TO DO
-            println!("SearchFriend: {:?}", name);
-            Ok(())
-        }
-    }
-
-}
 
 ///a handler for network messages.
 #[async_trait]
 trait Handler
-    where Self: Send  +  UdpConnection + TcpConnection 
 {
     fn handle_block_recitify(&self, msg: Message) -> Result<(), HError>;
     fn handle_chain_request(&self, msg: Message) -> Result<(), HError>;
@@ -158,7 +231,9 @@ trait Handler
 }
 
 
-pub struct MessageHandler {
+pub struct MessageHandler  {
+    //this is a pipe to this node's chain keeper.
+    pipe: Pipe<Message>,
 }
 
 #[async_trait]
@@ -171,6 +246,9 @@ impl Handler for MessageHandler {
         //TO DO
         Ok(())
     }
+    
+ 
+    
     fn handle_vote_block(&self, msg: Message) -> Result<(), HError> {
         //TO DO
         Ok(())
@@ -182,27 +260,23 @@ impl Handler for MessageHandler {
 }
 
 
-
 impl MessageHandler {
-    pub fn new() -> Self {
-        Self {}
-    }
-    pub async  fn handle(&self, msg: Message) -> Result<(), HError> {
-        match msg.message_type {
-            MessageType::BlockRecitify(_) => {
-                self.handle_block_recitify(msg).await
-            }
-            MessageType::ChainRequest(_) => {
-                self.handle_chain_request(msg).await    
-            }    
-            MessageType::VoteBlock(_) => {
-                self.handle_vote_block(msg).await
-            }
-            MessageType::SearchFriend(_) => {
-                self.handle_search_friend(msg).await
-            }
+    pub fn new(pipe_to_chain_keeper: Pipe<Message>)
+        -> Self {
+        Self {
+            pipe: pipe_to_chain_keeper,
         }
     }
+
+    pub async fn handle(&self, msg: Message) -> Result<(), HError> {
+        match msg.message_type {
+            MessageType::BlockRecitify(_) => self.handle_block_recitify(msg),
+            MessageType::ChainRequest(_) => self.handle_chain_request(msg),
+            MessageType::VoteBlock(_) => self.handle_vote_block(msg),
+            MessageType::SearchFriend(_) => self.handle_search_friend(msg),
+        }
+    }
+
 }
 
 

@@ -3,5 +3,4 @@ mod tcp;
 mod udp;
 mod network;
 pub mod protocol;
-pub use network::*;
 

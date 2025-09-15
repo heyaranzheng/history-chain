@@ -7,3 +7,7 @@ pub struct NomalChain <T>
 {
     pub chain: Vec<T>,
 }
+
+pub trait Chain{
+    
+}
