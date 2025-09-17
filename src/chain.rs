@@ -1,13 +1,18 @@
-use serde::{Serialize, Deserialize};
 use bincode::{Decode, Encode};
 
+use crate::block::Block;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq)]
-pub struct NomalChain <T> 
+
+pub trait Chain  
 {
-    pub chain: Vec<T>,
+    type Block: Block;
+    fn new() -> Self;
 }
 
-pub trait Chain{
-    
+#[derive(Debug, Clone, Encode, Decode, PartialEq )]
+pub struct BlockChain<B>
+    where B: Block + Encode + Decode<()>
+{
+    blocks: Vec<B>,
 }
+

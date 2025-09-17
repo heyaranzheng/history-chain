@@ -2,21 +2,25 @@ use std::mem::MaybeUninit;
 use std::net::{SocketAddr};
 
 use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite,};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 use async_trait::async_trait;
 
-use crate::constants::{ZERO_HASH, MAX_MSG_SIZE};
-use crate::chain::{Chain, NomalChain};
+use crate::constants::{MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, ZERO_HASH};
+use crate::chain::{Chain, BlockChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
 use crate::pipe::Pipe;
 use crate::block::{Block};
 
+///the signature of the message.
+type Signature = [u8; 64];
+
+
+
 ///This is the header of stream, when we create a connection by tcp.
-#[derive(Serialize, Deserialize, Debug, Decode, Encode, PartialEq)]
+#[derive(Debug, Decode, Encode, PartialEq)]
 struct Header {
     //the total size of the data we will get from the stream. 4 bytes.
     length: u32,
@@ -57,11 +61,14 @@ impl Header {
         where T: AsyncReadExt + Unpin,
     {
         //read the first 4 + 32 bytes of the stream, which is the length and signature of the data.
-        let header_enc = [0u8; 4 + 32];
+        let mut header_enc = [0u8; 4 + 32];
         let _ = stream.read_exact(&mut header_enc[..]).await?;
 
-        let length: u32 = self.decode_from_slice(& header_enc[..4])?.into();
-        let signature:[u8; 32] = self.decode_from_slice(& header_enc[4..])?.into();
+        let length_bytes: [u8;4] = self.decode_from_slice(& header_enc[..4])?.try_into()
+            .expect("Decode length error");
+        let length = u32::from_be_bytes(length_bytes);
+        let signature:[u8; 32] = self.decode_from_slice(& header_enc[4..])?.try_into()
+            .expect("Decode signature error");
 
         let header = Header::new(length, signature);
         Ok(header)
@@ -70,7 +77,7 @@ impl Header {
     async fn add_header_into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
         where T: AsyncWrite + Unpin,
     {
-        let header_enc = Vec::<u8>::with_capacity(4 + 32);
+        let mut  header_enc = Vec::<u8>::with_capacity(4 + 32);
 
         //encode the header to a vec
         let length_u8 = self.length.to_be_bytes();
@@ -88,29 +95,29 @@ impl Header {
      
         Ok(())
     }
+    //caculate the serialized size of the data.
     fn caculate_encode_size(&self, data: &[u8]) -> Result<usize, HError> {
         //create a config for bincode, with big-endian
         let config = bincode::config::standard().with_big_endian();
         //create a size_writer as a encoder to calculate the serialized size of the data.
         let mut size_writer = bincode::enc::write::SizeWriter::default();
-        let encoder = 
-            bincode::enc::EncoderImpl::new(size_writer, config);
-        bincode::encode_into_std_write(data, size_writer, config);
+        bincode::encode_into_writer(data,  &mut size_writer, config);
         let size = size_writer.bytes_written;
         Ok(size)
     }
+    
+
 }
 
 
 
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
-pub enum MessageType {
+#[derive(Debug, Clone, Decode, Encode, PartialEq)]
+pub enum MessageType
+{
     ///request for history chain, with a timestamp bigger than the given one
     ChainRequest (RequestInfo),
-    ///response for history chain, with a timestamp bigger than the given one
-    ChainResponse(NomalChain<dyn Block>),
     ///vote for a block if the block's validity is suspected.
-    VoteBlock(NomalChain<VoteBlock>),
+    VoteBlock(BlockChain<VoteBlock>),
     ///if the vote report show that the block is invalid, the data of the block keeped should be
     ///recitified by the network.
     BlockRecitify(BlockRec),
@@ -118,7 +125,7 @@ pub enum MessageType {
     SearchFriend(HashValue),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
+#[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct RequestInfo {
     src_addr: String,
     timestamp: u64,
@@ -132,7 +139,7 @@ unsafe impl Send for MessageType {}
 /// block is the second block strictly speaking in the chain).
 /// The result will be a number between 0 and 1, the consensus of the network, ervery block's result
 /// is the result according to the votes of the previous blocks.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
+#[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct VoteBlock {
     ///expire time of the vote
     pub expire_time: u64,
@@ -149,32 +156,32 @@ pub struct VoteBlock {
     ///the consensus of the network, the result will be a number between 0 and 1,
     result: f32,
 }
+impl Block for VoteBlock {}
+
+
 
 unsafe impl Send for VoteBlock {}
 
 ///block recitification message, the data of the block keeped should be 
 ///recitified by the network.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
+#[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct BlockRec {
     old_block: HashValue,
     new_block: HashValue,
 }
 
-pub async fn resolute_message<S> (stream: &mut S) -> Result<Message, HError> 
-    where S: tokio::io::AsyncRead + Unpin,
-{
-    let mut buf: [u8; MAX_MSG_SIZE] = unsafe { MaybeUninit::uninit().assume_init()};
-    let n = stream.read(&mut buf[..]).await?;
-    let msg = Message::decode_from_slice(&buf[..n])?;
-    Ok(msg)
-}
+
+
+
 
 
 ///A message that can be sent between nodes in the network.
-#[derive(Debug, Clone, Serialize, Deserialize, Decode, Encode, PartialEq)]
+#[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct Message {
-    ///the hash name of the sender node
+    ///the hash name of the sender node，the public key of the sender node.
     pub sender: HashValue,
+    ///the signature of the message, the signature is the hash of the message.
+    pub signature: Signature,
     ///message's timestamp
     pub timestamp: u64,
     ///message's type 
@@ -191,6 +198,7 @@ impl Message {
             message_type: 
                 MessageType::ChainRequest(RequestInfo{src_addr: "".to_string(), timestamp: 0}),
             receiver: ZERO_HASH,  
+            signature: [0u8; 64],
         }
     }
     pub fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
@@ -214,6 +222,14 @@ impl Message {
             return Err(HError::Message { message: "message too large, It's bigger than UDP_MSG_SIZE".to_string() });
         }
         Ok(vec)
+    }
+    pub async fn get_from_stream <S> (stream: &mut S) -> Result<Message, HError> 
+        where S: tokio::io::AsyncRead + Unpin,
+    {
+        let mut buf: [u8; MAX_UDP_MSG_SIZE] = unsafe { MaybeUninit::uninit().assume_init()};
+        let n = stream.read(&mut buf[..]).await?;
+        let msg = Message::decode_from_slice(&buf[..n])?;
+        Ok(msg)
     }
 }
 

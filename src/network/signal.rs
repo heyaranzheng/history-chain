@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 pub enum Signal {
     Close,
     ListenResult(TcpStream, String),
+    
 }
 impl Signal {
     ///create a new listen result signal

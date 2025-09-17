@@ -55,6 +55,8 @@ pub enum HError {
     #[error("Serialization error: {message}\n")]
     Serialization {message: String},
     
+    #[error("Identity error: {message}\n")]
+    Identity {message: String},
 }
 
 ///for pipe 

@@ -12,14 +12,7 @@ use crate::pipe::Pipe;
 use crate::network::signal::Signal;
 
 
-#[async_trait::async_trait]
-pub trait TcpConnection {
-    async fn listen <T> (&mut self, server_addr: String) -> Result<TcpListener, HError>{
-        TcpListener::bind(server_addr).await
-    }
-    async fn accept(&mut self, listener: &mut TcpListener) -> Result<(TcpStream, SocketAddr), HError>;
-    async fn client(&mut self, dst_addr: String, data: & mut [u8]) -> Result<TcpStream, HError>;
-}
+
 
  
 
