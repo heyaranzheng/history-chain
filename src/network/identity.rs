@@ -1,6 +1,6 @@
 
 use ed25519_dalek::ed25519::signature::SignerMut;
-use ed25519_dalek::{VerifyingKey, Signature, SigningKey};
+use ed25519_dalek::{VerifyingKey, Signature, SigningKey, Verifier};
 use rand::rngs::OsRng;
 
 use crate::herrors::HError;
@@ -31,10 +31,10 @@ impl Identity {
     }
 
     ///sign a message using the secret key
-    pub fn sign(&mut self, message: &[u8]) -> Result<[u8; 64], HError> {
+    pub fn sign_signature(&mut self, message: &[u8]) -> Result<[u8; 64], HError> {
         if let Some(secret_key) = & mut self.secret_key {
             Ok( secret_key.sign(message).to_bytes() )
-        } 
+        }
         else {
             Err(HError::Identity {message: "No secret key".to_string()})
         }
@@ -45,6 +45,17 @@ impl Identity {
     pub fn public_key_to_bytes(&self) -> [u8; 32] {
         self.public_key.to_bytes()
     }
+
+    ///verify the signature 
+    #[inline]
+    pub fn verify_signature(data: &[u8], public_key: &[u8;32], signature: &[u8; 64]) -> Result<(), HError> {
+        let signature = Signature::from_bytes(signature);
+        let public_key = VerifyingKey::from_bytes(public_key).unwrap();
+        public_key.verify(data, &signature)
+            .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
+    }
+
+
 }
 
 ///don't allow to clone the secret key
@@ -54,5 +65,19 @@ impl Clone for Identity {
             public_key: self.public_key.clone(),
             secret_key: None,
         }
+    }
+}
+
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_identity() -> Result<(), HError>{
+        let mut identity = Identity::new();
+        let message = b"hello world";
+        let signature = identity.sign_signature(message).unwrap();
+        Identity::verify_signature(message, &identity.public_key_to_bytes(), &signature)?;
+        Ok(())
     }
 }

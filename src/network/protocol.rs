@@ -1,7 +1,6 @@
 use std::mem::MaybeUninit;
 use std::net::{SocketAddr};
-
-use bincode::{Decode, Encode};
+use bincode::{Decode, Encode, config};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite,};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +14,7 @@ use crate::pipe::Pipe;
 use crate::block::{Block};
 
 ///the signature of the message.
-type Signature = [u8; 64];
+type SignatureBytes = [u8; 64];
 
 
 
@@ -24,13 +23,17 @@ type Signature = [u8; 64];
 struct Header {
     //the total size of the data we will get from the stream. 4 bytes.
     length: u32,
-    //the signature of the data, 32 bytes.
-    signature: HashValue,
+    //the signature of the data, 64 bytes.
+    signature: SignatureBytes,
+    //public key of the sender, 32 bytes.
+    public_key: HashValue,
 }
 impl Header {
-    fn new(length: u32, signature: HashValue) -> Self {
-        Self { length, signature }
+    fn new(length: u32, signature: SignatureBytes, public_key: HashValue) -> Self {
+        Self { length, signature, public_key}
     }
+
+    //encode the header to a vec
     fn enocde_to_vec(&self, data: &[u8]) -> Result<Vec<u8>, HError> {
         //create a config for bincode, with big-endian
         let config = bincode::config::standard().with_big_endian();
@@ -39,49 +42,51 @@ impl Header {
            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
         Ok(vec)
     }
+
+    //encode the header into a slice
     fn encode_into_slice(&self, data: &[u8], buffer: &mut [u8]) -> Result<usize, HError> {
         //create a config for bincode, with big-endian
         let config = bincode::config::standard().with_big_endian();
         //encode the header to a vec
-        let vec = bincode::encode_into_slice(data, buffer, config)
+        let size = bincode::encode_into_slice(data, buffer, config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
-        Ok(vec)
+        Ok(size)
     }
-    fn decode_from_slice(&self, data: &[u8]) -> Result<Vec<u8>, HError> {
+    
+    //decode the header from a slice
+    fn decode_from_slice <T> (&self, data: &[u8]) -> Result<T, HError> 
+        where T: Decode<()>,
+    {
         //create a config for bincode, with big-endian
         let config = bincode::config::standard().with_big_endian();
         //decode the header from a vec 
         let result = 
-            bincode::decode_from_slice::<Vec<u8>, _>(data, config)
+            bincode::decode_from_slice::<T, _>(data, config)
             .map_err(|e| HError::Message { message: format!("decode error in header: {:?}", e) })?;
         Ok(result.0)
     }
+
     //extract the header from the stream
     async fn get_header_from_stream <T> (&self, stream:&mut T) -> Result<Header, HError> 
         where T: AsyncReadExt + Unpin,
     {
-        //read the first 4 + 32 bytes of the stream, which is the length and signature of the data.
-        let mut header_enc = [0u8; 4 + 32];
+        //read the first 4 + 64 + 32 bytes of the stream, which is the length and signature of the data.
+        let mut header_enc = [0u8; 4 + 32 + 64];
         let _ = stream.read_exact(&mut header_enc[..]).await?;
 
-        let length_bytes: [u8;4] = self.decode_from_slice(& header_enc[..4])?.try_into()
-            .expect("Decode length error");
-        let length = u32::from_be_bytes(length_bytes);
-        let signature:[u8; 32] = self.decode_from_slice(& header_enc[4..])?.try_into()
-            .expect("Decode signature error");
-
-        let header = Header::new(length, signature);
+        let header = self.decode_from_slice( &header_enc[..])?;
         Ok(header)
     }
     //add the header to the stream
     async fn add_header_into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
         where T: AsyncWrite + Unpin,
     {
-        let mut  header_enc = Vec::<u8>::with_capacity(4 + 32);
+        
+        //create a vec to store the header
+        let mut  header_enc = Vec::<u8>::with_capacity(4 + 32 + 64);
 
         //encode the header to a vec
-        let length_u8 = self.length.to_be_bytes();
-        let signature_u8 = self.signature.to_vec();
+        self.encode_into_slice(self, buffer)
         let _ = self.encode_into_slice(&length_u8[..], &mut header_enc[..4])?;
         let _ = self.encode_into_slice(&signature_u8[..], &mut header_enc[4..])?;
         
@@ -101,7 +106,7 @@ impl Header {
         let config = bincode::config::standard().with_big_endian();
         //create a size_writer as a encoder to calculate the serialized size of the data.
         let mut size_writer = bincode::enc::write::SizeWriter::default();
-        bincode::encode_into_writer(data,  &mut size_writer, config);
+        let _ = bincode::encode_into_writer(data,  &mut size_writer, config);
         let size = size_writer.bytes_written;
         Ok(size)
     }
@@ -171,17 +176,13 @@ pub struct BlockRec {
 }
 
 
-
-
-
-
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct Message {
     ///the hash name of the sender node，the public key of the sender node.
     pub sender: HashValue,
     ///the signature of the message, the signature is the hash of the message.
-    pub signature: Signature,
+    pub signature: SignatureBytes,
     ///message's timestamp
     pub timestamp: u64,
     ///message's type 
@@ -231,6 +232,9 @@ impl Message {
         let msg = Message::decode_from_slice(&buf[..n])?;
         Ok(msg)
     }
+
+
+
 }
 
 unsafe impl Send for Message {}
