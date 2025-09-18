@@ -33,32 +33,52 @@ impl Header {
         Self { length, signature, public_key}
     }
 
-    //encode the header to a vec
-    fn enocde_to_vec(&self, data: &[u8]) -> Result<Vec<u8>, HError> {
+    ///Instead of encoding the header as a whole, we encode its' three fields separately to ensure
+    ///the encoded length is a fixed value.
+    fn encode_into_slice(&self, buffer: &mut [u8]) -> Result<usize, HError> {
+        //check buffer size
+        if buffer.len() < 100 {
+            return Err(HError::Message 
+                {
+                    message: format!("in header encode_into_slice, buffer size is too small: {}", buffer.len()) 
+                })
+        }
+        let mut total_size = 0;
+
         //create a config for bincode, with big-endian
-        let config = bincode::config::standard().with_big_endian();
-        //encode the header to a vec
-        let vec = bincode::encode_to_vec(data, config)
-           .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
-        Ok(vec)
+        let config = bincode::config::standard()
+            .with_big_endian()
+            .with_fixed_int_encoding();
+        //encode the header 
+        
+        let size = 
+            bincode::encode_into_slice(self.length, &mut buffer[..4], config)
+            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+        total_size += size;
+        println!("size: {:?}", size);
+        let size = 
+            bincode::encode_into_slice(self.signature,&mut  buffer[4..68], config)
+            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+        total_size += size;
+        println!("size: {:?}", size);
+        let size =
+            bincode::encode_into_slice(self.public_key, &mut buffer[68..100], config)
+            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+        total_size += size;
+        println!("size: {:?}", size);
+        
+        Ok(total_size)
     }
 
-    //encode the header into a slice
-    fn encode_into_slice(&self, data: &[u8], buffer: &mut [u8]) -> Result<usize, HError> {
-        //create a config for bincode, with big-endian
-        let config = bincode::config::standard().with_big_endian();
-        //encode the header to a vec
-        let size = bincode::encode_into_slice(data, buffer, config)
-            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
-        Ok(size)
-    }
     
     //decode the header from a slice
-    fn decode_from_slice <T> (&self, data: &[u8]) -> Result<T, HError> 
+    fn decode_from_slice <T> (data: &[u8]) -> Result<T, HError> 
         where T: Decode<()>,
     {
         //create a config for bincode, with big-endian
-        let config = bincode::config::standard().with_big_endian();
+        let config = bincode::config::standard()
+            .with_big_endian()
+            .with_fixed_int_encoding();
         //decode the header from a vec 
         let result = 
             bincode::decode_from_slice::<T, _>(data, config)
@@ -67,36 +87,32 @@ impl Header {
     }
 
     //extract the header from the stream
-    async fn get_header_from_stream <T> (&self, stream:&mut T) -> Result<Header, HError> 
+    async fn get_header_from_stream <T> ( stream: &mut T) -> Result<Header, HError> 
         where T: AsyncReadExt + Unpin,
     {
         //read the first 4 + 64 + 32 bytes of the stream, which is the length and signature of the data.
-        let mut header_enc = [0u8; 4 + 32 + 64];
-        let _ = stream.read_exact(&mut header_enc[..]).await?;
+        let mut header_enc = [0u8; 100];
+        let  _ = stream.read_exact(&mut header_enc[..]).await?;
 
-        let header = self.decode_from_slice( &header_enc[..])?;
+        let length = Header::decode_from_slice::<u32>( &header_enc[..4])?;
+        let signature = Header::decode_from_slice::<SignatureBytes>(&header_enc[4..68])?;
+        let public_key = Header::decode_from_slice::<HashValue>(&header_enc[68..100])?;
+        let header = Header::new(length, signature, public_key);
         Ok(header)
     }
+
     //add the header to the stream
     async fn add_header_into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
         where T: AsyncWrite + Unpin,
     {
-        
-        //create a vec to store the header
-        let mut  header_enc = Vec::<u8>::with_capacity(4 + 32 + 64);
+        //create a vec to store the header, maker sure the size is enough.
+        let mut  header_enc = vec![0u8; 100];
 
         //encode the header to a vec
-        self.encode_into_slice(self, buffer)
-        let _ = self.encode_into_slice(&length_u8[..], &mut header_enc[..4])?;
-        let _ = self.encode_into_slice(&signature_u8[..], &mut header_enc[4..])?;
+        let size = self.encode_into_slice(&mut header_enc[..])?;
         
-        //check the size of the header_encoded
-        if header_enc.len() != 32 + 4 {
-            return Err(HError::Message { message: "header size error".to_string() });
-        };
-
         //write the header to the stream
-        stream.write_all(&header_enc[..]).await?;
+        stream.write_all(&header_enc[..size]).await?;
      
         Ok(())
     }
@@ -228,7 +244,7 @@ impl Message {
         where S: tokio::io::AsyncRead + Unpin,
     {
         let mut buf: [u8; MAX_UDP_MSG_SIZE] = unsafe { MaybeUninit::uninit().assume_init()};
-        let n = stream.read(&mut buf[..]).await?;
+        let n = stream.read_exact(&mut buf[..]).await?;
         let msg = Message::decode_from_slice(&buf[..n])?;
         Ok(msg)
     }
@@ -301,6 +317,8 @@ impl MessageHandler {
 
 
 mod tests {
+    use tokio::io::AsyncSeekExt;
+
     use super::*;
 
     #[test]
@@ -311,5 +329,31 @@ mod tests {
         let decoded = Message::decode_from_slice(&encoded).unwrap();
 
         assert_eq!(msg, decoded);
+    }
+    #[tokio::test]
+    async fn test_header() {
+        let header = Header::new(10, [2u8; 64], [1u8; 32]);
+
+        let buffer = [0u8; 10000];
+        
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite};
+        use tokio::fs::{File, OpenOptions};
+
+        let mut stream = OpenOptions::new()
+            .read(true)
+           .write(true)
+           .create(true)
+           .open("test.bin")
+            .await
+            .unwrap();
+
+        header.add_header_into_stream(&mut stream).await.unwrap();
+
+        stream.seek(std::io::SeekFrom::Start(0)).await.unwrap();
+        let ret_header = Header::get_header_from_stream(&mut stream).await.unwrap();
+        assert_eq!(header, ret_header);
+
+        tokio::fs::remove_file("test.bin").await.unwrap();
+
     }
 }
