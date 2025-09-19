@@ -21,7 +21,7 @@ type SignatureBytes = [u8; 64];
 
 ///This is the header of stream, when we create a connection by tcp.
 #[derive(Debug, Decode, Encode, PartialEq)]
-struct Header {
+pub struct Header {
     //the total size of the data we will get from the stream. 4 bytes.
     length: u32,
     //the signature of the data, 64 bytes.
@@ -33,10 +33,15 @@ impl Header {
     fn new(length: u32, signature: SignatureBytes, public_key: HashValue) -> Self {
         Self { length, signature, public_key}
     }
+
+    #[inline]
+    pub fn header_size() -> usize {
+        100
+    }
     
     ///Instead of encoding the header as a whole, we encode its' three fields separately to ensure
     ///the encoded length is a fixed value.
-    fn encode_into_slice(&self, buffer: &mut [u8]) -> Result<usize, HError> {
+    pub fn encode_into_slice(&self, buffer: &mut [u8]) -> Result<usize, HError> {
         //check buffer size
         if buffer.len() < 100 {
             return Err(HError::Message 
@@ -73,7 +78,7 @@ impl Header {
 
     
     //decode the header from a slice
-    fn decode_from_slice  (data: &[u8]) -> Result<Header, HError> 
+    pub fn decode_from_slice  (data: &[u8]) -> Result<Header, HError> 
     {
         //create a config for bincode, with big-endian, and a fixed int encoding.
         let config = bincode::config::standard()
@@ -98,7 +103,7 @@ impl Header {
     }
 
     //extract the header from the stream
-    async fn from_stream <T> ( stream: &mut T) -> Result<Header, HError> 
+    pub async fn from_stream <T> ( stream: &mut T) -> Result<Header, HError> 
         where T: AsyncReadExt + Unpin,
     {
         //read the first 4 + 64 + 32 bytes of the stream, which is the length and signature of the data.
@@ -110,7 +115,7 @@ impl Header {
     }
 
     //add the header to the stream
-    async fn into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
+    pub async fn into_stream<T>(&self, stream: &mut T) -> Result<(), HError> 
         where T: AsyncWrite + Unpin,
     {
         //create a vec to store the header, maker sure the size is enough.
@@ -222,7 +227,7 @@ pub struct Message {
 }
 
 impl Message {
-    fn new_with_zero() -> Self{
+    pub fn new_with_zero() -> Self{
         Self {
             sender: ZERO_HASH,
             timestamp: 0,
@@ -232,20 +237,32 @@ impl Message {
             signature: [0u8; 64],
         }
     }
-    fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
-        //create a config for bincode, with big-endian
-        let config = bincode::config::standard().with_big_endian();
-        //decode the slice to a message
-        let (msg, _): ( Self, _) = bincode::decode_from_slice(slice, config)
-            .map_err(|_| HError::Message { message: "decode error in message".to_string() })?;
-        Ok(msg)
+
+    ///decode the message from a slice, verify the signature of the message with provided header.
+    ///Return the message if the signature is valid, otherwise return an error.
+    pub fn decode_from_slice(slice: &[u8], header: &Header) 
+    -> Result<Self, HError> {
+        //verify the signature of the message
+        match header.verify_header(slice) {
+            Ok(()) => {
+                //create a config for bincode, with big-endian
+                let config = bincode::config::standard().with_big_endian();
+                //decode the slice to a message
+                let (msg, _): ( Self, _) = bincode::decode_from_slice(slice, config)
+                    .map_err(|_| HError::Message { message: "decode error in message".to_string() })?;
+                Ok(msg)
+            }
+            Err(e) => {
+                Err(HError::Message { message: format!("verify error in message: {}", e) })
+            }
+        }
     }
 
     ///encode the message into a slice, signate the message, and add a header at the head of the slice.
     ///slice's size is MAX_MSG_SIZE.
     ///We need a identity to sign the message.
     ///Reture the SIZE of MESSAGE, NOT inluding the header.
-    fn encode_into_slice(&self, identity:&mut Identity, buffer: &mut [u8]) -> Result<usize, HError> {
+    pub fn encode_into_slice(&self, identity:&mut Identity, buffer: &mut [u8]) -> Result<usize, HError> {
         //check buffer size
         if buffer.len() < MAX_MSG_SIZE {
             return Err(HError::Message { message: "buffer size is too small".to_string() });
@@ -306,19 +323,10 @@ impl Message {
         }
         stream.read_exact(&mut uninit_buf[..]).await?;
 
-        //verify the message
-        match header.verify_header(&uninit_buf[..]) {
-            Ok(()) => {
-                let msg = Message::decode_from_slice(&uninit_buf[..])?;
-                return Ok(msg);
-            }
-            Err(e) => {
-               return Err(HError::Message { message: format!("verify message error: {:?}", e) });
-            }
-        }
+        //decode the message from the buffer
+        let msg =Message::decode_from_slice(&uninit_buf[..], &header)?;
+        Ok(msg)
     }
-
-
 
 }
 
@@ -397,8 +405,12 @@ mod tests {
         use crate::network::identity::Identity;
         let mut  iden = Identity::new();
 
-        let size = msg.encode_into_slice(&mut iden, &mut [0u8; MAX_MSG_SIZE]).unwrap();
-        let msg_ret = Message::decode_from_slice(&[0u8; MAX_MSG_SIZE][..size]).unwrap();
+        let size = 
+            msg.encode_into_slice(&mut iden, &mut [0u8; MAX_MSG_SIZE]).unwrap();
+        let header = 
+            Header::decode_from_slice(&[0u8; MAX_MSG_SIZE][..100]).unwrap();
+        let msg_ret = 
+            Message::decode_from_slice(&[0u8; MAX_MSG_SIZE][100..size], &header ).unwrap();
 
         assert_eq!(msg, msg_ret);
     }

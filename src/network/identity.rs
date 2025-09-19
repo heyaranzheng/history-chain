@@ -78,7 +78,7 @@ mod tests {
         let mut identity = Identity::new();
         let message = b"hello world";
         let signature = identity.sign_msg(message).unwrap();
-        Identity::verify_signature(message, &identity.public_key_to_bytes(), &signature)?;
+        Identity::verify_signature_bytes(message, &identity.public_key_to_bytes(), &signature)?;
         Ok(())
     }
 }

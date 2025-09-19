@@ -4,42 +4,52 @@ use crate::constants::{
     UDP_RECV_PORT, MAX_UDP_MSG_SIZE
 };
 use crate::herrors::HError;
+use crate::network::identity::Identity;
 use crate::network::protocol::Message;
+use crate::network::protocol::Header;
 
 pub trait UdpConnection {
     ///udp connection, receive message from all nodes, return message and source address
     async fn udp_recv_from(&mut self) -> Result< (Message, String), HError> {
-        let mut buf = vec![0; MAX_UDP_MSG_SIZE];
+        let mut uninit_buffer = Vec::with_capacity(MAX_UDP_MSG_SIZE);
+        unsafe { uninit_buffer.set_len(MAX_UDP_MSG_SIZE) };
 
         //bind to udp port for any address
         let udp_socket = UdpSocket::bind(format!("0.0.0.0:{}", UDP_RECV_PORT)).await?;
         //receive data from udp socket
-        let (size, src_addr) = udp_socket.recv_from(&mut buf).await?;
+        let (size, src_addr) = udp_socket.recv_from(&mut uninit_buffer).await?;
         let src_addr_str = format!("{}:{}", src_addr.ip(), src_addr.port());
         
-        //deserialize data to message
-        let msg = Message::decode_from_slice(&buf[..size])?;
+        //get header from the buffer
+        let header_size = Header::header_size();
+        let header = Header::decode_from_slice(&uninit_buffer[..header_size])?;
+
+        //decode message from buffer with header
+        let msg = 
+            Message::decode_from_slice(&uninit_buffer[header_size..size], & header)?;
 
         Ok((msg, src_addr_str))
     }
 
     ///udp connection, send message to another node
-    async fn udp_send_to(&mut self, my_addr: String, dst_addr: String, msg: &Message) -> Result<usize, HError> 
+    async fn udp_send_to(
+        &mut self, my_addr: String, 
+        dst_addr: String, 
+        msg: &Message,
+        identity: & mut Identity,
+    ) -> Result<usize, HError> 
+    
     {
-        let msg_encoded = msg.encode_to_vec()?;
-        //check the buffer size
-        if msg_encoded.len() > MAX_UDP_MSG_SIZE {
-            return Err(
-                HError::NetWork { 
-                    message: format!("buffer size is too large, need at most {}", MAX_UDP_MSG_SIZE)
-                } 
-            );
-        }
+        //encode message into buffer with a header
+        let mut uninit_buffer = Vec::with_capacity(MAX_UDP_MSG_SIZE);
+        unsafe { uninit_buffer.set_len(MAX_UDP_MSG_SIZE) };
+        let total_size = msg.encode_into_slice(identity, &mut uninit_buffer[..])?;
+
         //bind self address and udp port
         let udp_socket =UdpSocket::bind(format!("{}", my_addr)).await?;
         //send data to dst_addr
-        let _ = udp_socket.send_to(&msg_encoded[..], dst_addr).await?;
-        Ok(msg_encoded.len())
+        let _ = udp_socket.send_to(&uninit_buffer[..total_size], dst_addr).await?;
+        Ok(total_size)
         
     }
 }
@@ -62,7 +72,7 @@ mod tests {
         let dst_addr = "127.0.0.1:8081".to_string();
         let send_task = async move {
             let src_addr = format!("127.0.0.1:8080").to_string();
-            test.udp_send_to(src_addr, dst_addr, &msg).await.unwrap();
+            test.udp_send_to(src_addr, dst_addr, &msg, &mut Identity::new()).await.unwrap();
         };
 
         let mut test = Test;
