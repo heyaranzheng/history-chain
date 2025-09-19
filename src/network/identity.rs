@@ -30,9 +30,10 @@ impl Identity {
         }
     }
 
+    #[inline]
     ///sign a message using the secret key
-    pub fn sign_signature(&mut self, message: &[u8]) -> Result<[u8; 64], HError> {
-        if let Some(secret_key) = & mut self.secret_key {
+    pub fn sign_msg(&mut self, message: &[u8]) -> Result<[u8; 64], HError> {
+        if let Some(secret_key) = &mut self.secret_key {
             Ok( secret_key.sign(message).to_bytes() )
         }
         else {
@@ -48,13 +49,13 @@ impl Identity {
 
     ///verify the signature 
     #[inline]
-    pub fn verify_signature(data: &[u8], public_key: &[u8;32], signature: &[u8; 64]) -> Result<(), HError> {
+    pub fn verify_signature_bytes(data: &[u8], public_key: &[u8;32], signature: &[u8; 64]) -> Result<(), HError> {
         let signature = Signature::from_bytes(signature);
         let public_key = VerifyingKey::from_bytes(public_key).unwrap();
         public_key.verify(data, &signature)
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
     }
-
+    
 
 }
 
@@ -76,7 +77,7 @@ mod tests {
     fn test_identity() -> Result<(), HError>{
         let mut identity = Identity::new();
         let message = b"hello world";
-        let signature = identity.sign_signature(message).unwrap();
+        let signature = identity.sign_msg(message).unwrap();
         Identity::verify_signature(message, &identity.public_key_to_bytes(), &signature)?;
         Ok(())
     }
