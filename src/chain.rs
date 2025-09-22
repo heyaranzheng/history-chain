@@ -1,5 +1,7 @@
 
 
+use std::sync::atomic::AtomicUsize;
+
 use bincode::{Decode, Encode};
 
 use crate::block::Block;
@@ -13,23 +15,89 @@ pub trait Chain
     fn get_block(&self, index: u32) -> Option<Self::Block>;
 }
 
-
-#[derive(Debug, Clone, Encode, Decode, PartialEq )]
+//Clone Debug Encode Decode PartialEq are implemented for BlockChain<B> 
+#[derive(Debug, Encode, Decode )]
 pub struct BlockChain<B>
     where B: Block  
 {
     blocks: Vec<B>,
+    tail: AtomicUsize,
+
 }
 
+
 impl <B> BlockChain<B>
-    where B: Block 
+    where B: Block + Clone
 {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
+        let mut uninit_buffer = Vec::<B>::with_capacity(capacity);
+        unsafe{
+            uninit_buffer.set_len(capacity);
+        }
         Self {
-            blocks: Vec::new(),
+            blocks: uninit_buffer,
+            tail: AtomicUsize::new(0),
+        }
+    }
+
+    ///returns the index of the last block in the chain.
+    pub fn len(&self) -> usize {
+        self.tail.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    ///returns the last block in the chain.
+    pub fn tail(&self) -> Option<B> {
+        if self.tail.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            Some(self.blocks[self.tail.load(std::sync::atomic::Ordering::SeqCst) - 1].clone())
+        } else {
+            None
+        }
+    }
+    
+    ///returns the first block in the chain.
+    pub fn head(&self) -> Option<B> {
+        if self.tail.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            Some(self.blocks[0].clone())
+        } else {
+            None
+        }
+    }
+
+    ///This function's behavior is different from the push() we familiar with, the push() in 
+    ///the Vec will extend the vector if the capacity is not enough, but in this function, it will 
+    ///NOT.
+    pub fn push(&mut self, block: B) -> Result<(), HError> {
+        if self.tail.load(std::sync::atomic::Ordering::SeqCst) < self.blocks.len() {
+            self.blocks[self.tail.load(std::sync::atomic::Ordering::SeqCst)] = block;
+            self.tail.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        } else {
+            Err(HError::Chain  {message: "BlockChain is full".to_string()})
+        }
+    }
+
+
+}
+
+impl <B> Clone for BlockChain<B> 
+    where B: Block + Clone
+{
+    fn clone(&self) -> Self {
+        Self {
+            blocks: self.blocks.clone(),
+            tail: AtomicUsize::new(self.tail.load(std::sync::atomic::Ordering::SeqCst)),
         }
     }
 }
+
+impl <B> PartialEq for BlockChain<B>
+    where B: Block + PartialEq
+{
+    fn eq(&self, other: &Self) -> bool {
+        (self.blocks == other.blocks) && (self.tail.load(std::sync::atomic::Ordering::SeqCst) == 
+            other.tail.load(std::sync::atomic::Ordering::SeqCst))
+    }
+} 
 
 impl <B> Chain for BlockChain<B>
     where B: Block + Clone
