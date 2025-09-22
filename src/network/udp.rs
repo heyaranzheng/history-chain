@@ -1,7 +1,7 @@
 use tokio::net::{UdpSocket};
 
 use crate::constants::{
-    UDP_RECV_PORT, MAX_UDP_MSG_SIZE
+    MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_RECV_PORT
 };
 use crate::herrors::HError;
 use crate::network::identity::Identity;
@@ -43,7 +43,8 @@ pub trait UdpConnection {
         //encode message into buffer with a header
         let mut uninit_buffer = Vec::with_capacity(MAX_UDP_MSG_SIZE);
         unsafe { uninit_buffer.set_len(MAX_UDP_MSG_SIZE) };
-        let total_size = msg.encode_into_slice(identity, &mut uninit_buffer[..])?;
+        let header_size = Header::header_size();
+        let total_size = msg.encode_into_slice(identity, &mut uninit_buffer[..])? + header_size;
 
         //bind self address and udp port
         let udp_socket =UdpSocket::bind(format!("{}", my_addr)).await?;
@@ -57,8 +58,6 @@ pub trait UdpConnection {
 
 mod tests {
     use super::*;
-    use crate::network::protocol::{Message, MessageType};
-    use crate::network::udp::UdpConnection;
 
 
     #[tokio::test(flavor = "multi_thread")]
@@ -66,7 +65,7 @@ mod tests {
         let msg = Message::new_with_zero();
         let save_msg = msg.clone();
         struct Test;
-    
+        
         impl UdpConnection for Test {}
         let mut test = Test;
         let dst_addr = "127.0.0.1:8081".to_string();
@@ -84,6 +83,7 @@ mod tests {
             let (msg, src_addr) = test.udp_recv_from().await.unwrap();
             sender.send( (msg, src_addr)).await.unwrap();
         };
+        //if we sync the code below, we should use recv_task first, then send_task, 
         tokio::spawn(send_task);
         tokio::spawn(recv_task);
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();

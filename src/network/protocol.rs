@@ -264,7 +264,7 @@ impl Message {
     ///Reture the SIZE of MESSAGE, NOT inluding the header.
     pub fn encode_into_slice(&self, identity:&mut Identity, buffer: &mut [u8]) -> Result<usize, HError> {
         //check buffer size
-        if buffer.len() < MAX_MSG_SIZE {
+        if buffer.len() < MAX_UDP_MSG_SIZE {
             return Err(HError::Message { message: "buffer size is too small".to_string() });
         }
 
@@ -276,7 +276,7 @@ impl Message {
 
         //check the size of the message
         let total_size = size + 100;
-        if total_size > MAX_MSG_SIZE {
+        if total_size > MAX_UDP_MSG_SIZE {
             //-----------------------------------------
             //NEED TO ADD A CHUNKING FUNCTION HERE( the public_key only send at the first time.)
             //-----------------------
@@ -355,7 +355,9 @@ impl Handler for MessageHandler {
         //TO DO
         Ok(())
     }
-    fn handle_chain_request(&self, msg: Message) -> Result<(), HError> {
+    async fn handle_chain_request(&self, msg: Message, dst_addr: String) -> Result<(), HError> {
+        //connect to the requested node,
+      
         //TO DO
         Ok(())
     }

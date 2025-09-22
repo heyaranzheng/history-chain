@@ -8,3 +8,5 @@ mod fpsc;
 mod hash;
 mod pipe;
 mod block;
+mod chain_map;
+mod chain_keeper;
