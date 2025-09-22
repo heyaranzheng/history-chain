@@ -9,7 +9,8 @@ use crate::herrors::HError;
 pub trait Chain  
 {
     type Block: Block;
-    fn new() -> Self;
+    //blocks in the object should have some kind of linear relationship.
+    fn get_block(&self, index: u32) -> Option<Self::Block>;
 }
 
 
@@ -20,31 +21,55 @@ pub struct BlockChain<B>
     blocks: Vec<B>,
 }
 
-pub trait TypeInfo{
-    type B;
+impl <B> BlockChain<B>
+    where B: Block + Encode + Decode<()>
+{
+    pub fn new() -> Self {
+        Self {
+            blocks: Vec::new(),
+        }
+    }
 }
+
+impl <B> Chain for BlockChain<B>
+    where B: Block + Encode + Decode<()> + Clone
+{
+    type Block = B;
+
+    fn get_block(&self, index: u32) -> Option<Self::Block> {
+        if index < self.blocks.len() as u32 {
+            Some(self.blocks[index as usize].clone())
+        } else {
+            None
+        }
+    }
+}
+
 
 //this is used to store the information of a chain for searching.
 pub struct ChainInfo {
-    pub length: Option<u64>,
-    pub timestamp_start: Option<u64>,
-    pub timestamp_end: Option<u64>,
+    pub digest_id: Option<(u32, u32)>,
+    pub index: Option<(u32, u32)>,
+    pub timestamp: Option<(u64, u64)>,
     pub containt_hash: Option<HashValue>,
     pub merkle_root: Option<HashValue>,
-    pub main_chain_block_count: Option<u32>,
+    pub data_uuid: Option<u32>,
+    pub data_hash: Option<HashValue>,
 }
 
 
 impl  ChainInfo {
     pub fn new() -> Self {
         Self {
-            length: None,
-            timestamp_start: None,
-            timestamp_end: None,
+            digest_id: None,
+            index: None,
+            timestamp: None,
             containt_hash: None,
             merkle_root: None,
-            main_chain_block_count: None,
+            data_uuid: None,
+            data_hash: None,
         }
+     
     }
 }
 
