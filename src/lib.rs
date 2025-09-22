@@ -1,12 +1,11 @@
 mod herrors;
 mod network;
 mod nodes;
-mod chain_manager;
+mod manager;
 mod constants;
 mod chain;
 mod fpsc;
 mod hash;
 mod pipe;
 mod block;
-mod chain_map;
-mod chain_keeper;
+mod keeper;

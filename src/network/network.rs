@@ -30,6 +30,7 @@ pub struct NetworkHandler {
 impl UdpConnection for NetworkHandler  {}
 
 
+
 mod tests {
     use super::*;
     use crate::network::protocol::{Message, MessageType};

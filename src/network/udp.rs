@@ -89,7 +89,6 @@ mod tests {
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();
         assert_eq!(save_msg, recv_msg);
         assert_eq!(src_addr, "127.0.0.1:8080"); 
-
        
     }
 

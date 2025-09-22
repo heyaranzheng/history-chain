@@ -59,6 +59,10 @@ pub trait Hasher {
         hash
     }
 
+    use crate::network::protocol::Message;
+    //caculate the merkle root by a given chain
+    fn merkle_root(chain: ) -> HashValue {
+
 }
 
 #[async_trait]

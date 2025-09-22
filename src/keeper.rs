@@ -6,18 +6,20 @@ use crate::block::Block;
 use crate::herrors::HError;
 use crate::chain::{BlockChain, Chain, ChainInfo};
 
+
 pub struct ChainRef<B>
     where B: Block
 {
     data: *const B,
     len: usize,
 }
+unsafe impl Send for ChainRef<impl Block> {}
 
 pub trait Keeper {
     type DigestBlock: Block + Encode + Decode<()>;
     type DataBlock: Block + Encode + Decode<()>;
-    fn main(&self, chain_info: ChainInfo) -> Option<BlockChain<Self::DigestBlock>>;
-    fn side(&self, chain_info: ChainInfo) -> Option<BlockChain<Self::DataBlock>>;
+    fn main_chain(&self, chain_info: ChainInfo) -> Option<BlockChain<Self::DigestBlock>>;
+    fn side_chains(&self, chain_info: ChainInfo) -> Vec<ChainRef<Self::DataBlock>>;
 }
 
 pub struct ChainKeeper  <B, D>
@@ -46,11 +48,11 @@ impl <B, D> Keeper for ChainKeeper<B, D>
 {
     type DigestBlock = D;
     type DataBlock = B;
-    fn main(&self, chain_info: ChainInfo) -> Option<BlockChain<D>> {
+    fn main_chain(&self, chain_info: ChainInfo) -> Option<BlockChain<D>> {
         None
     }
-    fn side(&self, chain_info: ChainInfo) -> Option<BlockChain<B>> {
-        None
+    fn side_chains(&self, chain_info: ChainInfo) -> Vec<ChainRef<B>> {
+        Vec::new()
     }
 }
     
