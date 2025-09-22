@@ -7,6 +7,8 @@ use tokio::fs::File;
 
 use crate::{constants::ZERO_HASH, herrors::HError}; 
 use crate::network::protocol::Message;
+use crate::chain::BlockChain;
+use crate::block::Block;
 
 //use [u8; 32] as hash type
 pub type HashValue = [u8; 32];
@@ -59,9 +61,13 @@ pub trait Hasher {
         hash
     }
 
-    use crate::network::protocol::Message;
+  
     //caculate the merkle root by a given chain
-    fn merkle_root(chain: ) -> HashValue {
+    fn merkle_root<B>(chain: &BlockChain<B>) -> HashValue 
+        where B: Block 
+    {
+
+    }
 
 }
 

@@ -16,13 +16,13 @@ pub trait Chain
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq )]
 pub struct BlockChain<B>
-    where B: Block + Encode + Decode<()>
+    where B: Block  
 {
     blocks: Vec<B>,
 }
 
 impl <B> BlockChain<B>
-    where B: Block + Encode + Decode<()>
+    where B: Block 
 {
     pub fn new() -> Self {
         Self {
@@ -32,7 +32,7 @@ impl <B> BlockChain<B>
 }
 
 impl <B> Chain for BlockChain<B>
-    where B: Block + Encode + Decode<()> + Clone
+    where B: Block + Clone
 {
     type Block = B;
 

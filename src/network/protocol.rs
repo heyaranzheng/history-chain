@@ -181,6 +181,10 @@ unsafe impl Send for MessageType {}
 /// is the result according to the votes of the previous blocks.
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct VoteBlock {
+    ///hash of this block
+    pub hash: HashValue,
+    ///hash of the previous block
+    pub prev_hash: HashValue,
     ///expire time of the vote
     pub expire_time: u64,
     ///the block's hash
@@ -196,7 +200,16 @@ pub struct VoteBlock {
     ///the consensus of the network, the result will be a number between 0 and 1,
     result: f32,
 }
-impl Block for VoteBlock {}
+impl Block for VoteBlock {
+    #[inline]
+    fn hash(&self) -> HashValue {
+        self.hash
+    }
+    #[inline]
+    fn prev_hash(&self) -> HashValue {
+        self.prev_hash
+    }
+}
 
 
 
