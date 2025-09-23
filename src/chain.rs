@@ -1,7 +1,8 @@
 
 
-use std::sync::atomic::AtomicUsize;
-
+use serde::Deserialize;
+use tokio::sync::RwLock;
+use std::sync::Arc;
 use bincode::{Decode, Encode};
 
 use crate::block::Block;
@@ -12,106 +13,135 @@ pub trait Chain
 {
     type Block: Block;
     //blocks in the object should have some kind of linear relationship.
-    fn get_block(&self, index: u32) -> Option<Self::Block>;
+    async fn get_block(&self, index: u32) -> Option<Self::Block>;
 }
 
 //Clone Debug Encode Decode PartialEq are implemented for BlockChain<B> 
-#[derive(Debug, Encode, Decode )]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub struct BlockChain<B>
     where B: Block  
 {
     blocks: Vec<B>,
-    tail: AtomicUsize,
-
 }
-
 
 impl <B> BlockChain<B>
     where B: Block + Clone
 {
-    pub fn new(capacity: usize) -> Self {
-        let mut uninit_buffer = Vec::<B>::with_capacity(capacity);
-        unsafe{
-            uninit_buffer.set_len(capacity);
-        }
+    pub fn new() -> Self {
         Self {
-            blocks: uninit_buffer,
-            tail: AtomicUsize::new(0),
+            blocks: Vec::<B>::new()
+        }
+    }
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            blocks: Vec::<B>::with_capacity(capacity)
+        }
+    }
+    
+    pub async fn snap_rwlockChain(chain: RwlockChain<B>) -> Self {
+        Self {
+            blocks: chain.blocks.read().await.clone()
         }
     }
 
+    pub fn into_RwlockChain(self) -> RwlockChain<B> {
+        RwlockChain {
+            blocks: Arc::new(RwLock::new(self.blocks))
+        }
+    }
+
+}
+
+pub struct RwlockChain<B> {
+   blocks: Arc<RwLock<Vec<B>>>,
+}
+
+
+impl <B> RwlockChain<B>
+    where B: Block + Clone
+{
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            blocks: Arc::new(RwLock::new(Vec::<B>::with_capacity(capacity)))
+        }
+    }
+
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            blocks: Arc::new(RwLock::new(Vec::<B>::new()))
+        }
+    }
+
+    pub fn from_blockchain(chain: BlockChain<B>) -> Self {
+        Self {
+            blocks: Arc::new(RwLock::new(chain.blocks))
+        }
+    }
+    
+
     ///returns the index of the last block in the chain.
-    pub fn len(&self) -> usize {
-        self.tail.load(std::sync::atomic::Ordering::SeqCst)
+    pub async fn len(&self) -> usize {
+        let r =self.blocks.read().await;
+        r.len()
+    }
+
+    ///returns the capacity of the chain.
+    pub async fn capacity(&self) -> usize {
+        self.blocks.read().await.capacity()
     }
 
     ///returns the last block in the chain.
-    pub fn tail(&self) -> Option<B> {
-        if self.tail.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-            Some(self.blocks[self.tail.load(std::sync::atomic::Ordering::SeqCst) - 1].clone())
-        } else {
+    pub async fn tail(&self) -> Option<B> {
+        let r = self.blocks.read().await;
+        if r.len() > 0 {
+           Some(r[r.len() - 1].clone())
+        }else {
+            drop(r);
             None
         }
     }
     
     ///returns the first block in the chain.
-    pub fn head(&self) -> Option<B> {
-        if self.tail.load(std::sync::atomic::Ordering::SeqCst) > 0 {
-            Some(self.blocks[0].clone())
-        } else {
+    pub async fn head(&self) -> Option<B> {
+        let r = self.blocks.read().await;
+        if r.len() > 0 {
+            Some(r[0].clone())
+        }else {
+            drop(r);
             None
         }
     }
 
-    ///This function's behavior is different from the push() we familiar with, the push() in 
-    ///the Vec will extend the vector if the capacity is not enough, but in this function, it will 
-    ///NOT.
-    pub fn push(&mut self, block: B) -> Result<(), HError> {
-        if self.tail.load(std::sync::atomic::Ordering::SeqCst) < self.blocks.len() {
-            self.blocks[self.tail.load(std::sync::atomic::Ordering::SeqCst)] = block;
-            self.tail.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        } else {
-            Err(HError::Chain  {message: "BlockChain is full".to_string()})
-        }
+    ///This push will NOT extend the capacity of the chain if the chain is full.    
+    pub async fn push(&self, block: B)  {
+        let mut w = self.blocks.write().await;
+        w.push(block);
     }
 
 
 }
 
-impl <B> Clone for BlockChain<B> 
-    where B: Block + Clone
-{
-    fn clone(&self) -> Self {
-        Self {
-            blocks: self.blocks.clone(),
-            tail: AtomicUsize::new(self.tail.load(std::sync::atomic::Ordering::SeqCst)),
-        }
-    }
-}
 
-impl <B> PartialEq for BlockChain<B>
-    where B: Block + PartialEq
-{
-    fn eq(&self, other: &Self) -> bool {
-        (self.blocks == other.blocks) && (self.tail.load(std::sync::atomic::Ordering::SeqCst) == 
-            other.tail.load(std::sync::atomic::Ordering::SeqCst))
-    }
-} 
 
-impl <B> Chain for BlockChain<B>
+impl <B> Chain for RwlockChain<B>
     where B: Block + Clone
 {
     type Block = B;
 
-    fn get_block(&self, index: u32) -> Option<Self::Block> {
-        if index < self.blocks.len() as u32 {
-            Some(self.blocks[index as usize].clone())
-        } else {
+    async fn get_block(&self, index: u32) -> Option<Self::Block> {
+        let r = self.blocks.read().await;
+        if index < r.len() as u32 {
+            Some(r[index as usize].clone())
+        }else {
+            drop(r);
             None
         }
     }
 }
+
+
 
 
 //this is used to store the information of a chain for searching.

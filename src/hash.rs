@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
 
+use crate::constants;
 use crate::{constants::ZERO_HASH, herrors::HError}; 
 use crate::network::protocol::Message;
 use crate::chain::BlockChain;
@@ -66,7 +67,8 @@ pub trait Hasher {
     fn merkle_root<B>(chain: &BlockChain<B>) -> HashValue 
         where B: Block 
     {
-
+        //TODO: implement this function
+        constants::ZERO_HASH
     }
 
 }

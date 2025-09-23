@@ -40,6 +40,9 @@ pub enum HError {
     #[error("Chain error: {message}\n")]
     Chain {message: String },
 
+    #[error("Chain error: {message}\n")]
+    ChainFull {message: String },
+
     #[error("storage error: {message}\n")]
     Storage {message: String },
 
@@ -66,6 +69,7 @@ pub enum PipeError {
     Full,
     Empty,
 }
+
 impl Display for PipeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
