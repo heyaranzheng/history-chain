@@ -163,20 +163,20 @@ pub struct ChainInfo {
     pub digest_id: Option<u32>,
     pub index: Option<(u32, u32)>,
     pub timestamp: Option<(u64, u64)>,
-    pub containt_hash: Option<HashValue>,
+    pub hash: Option<HashValue>,
     pub merkle_root: Option<HashValue>,
     pub data_uuid: Option<u32>,
     pub data_hash: Option<HashValue>,
 }
 
 
-impl  ChainInfo {
+impl <'a> ChainInfo {
     pub fn new() -> Self {
         Self {
             digest_id: None,
             index: None,
             timestamp: None,
-            containt_hash: None,
+            hash: None,
             merkle_root: None,
             data_uuid: None,
             data_hash: None,
@@ -184,15 +184,32 @@ impl  ChainInfo {
     }
 
     ///select a segment from a list of chains based on the information in the ChainInfo.
-    pub fn select_from <B: Block + Clone>(&self, chains: &Vec<BlockChain<B>>) -> 
-        Option<BlockChain<B>> 
+    pub fn select_from <B: Block + Clone>(&self, chains: &'a Vec<BlockChain<B>>) -> 
+        Option<&'a BlockChain<B>> 
 
     {
+        //check the hash first. 
+        if let Some(hash) = self.hash {
+            return self.check_data_in_chains(hash, chains);
+        }
+        
+        //check the data_uuid
+        if let Some(data_uuid) = self.data_uuid {
+            return self.check_data_in_chains(data_uuid, chains);
+        }
+
+        //check the data_hash
+        if let Some(data_hash) = self.data_hash {
+            return self.check_data_in_chains(data_hash, chains);
+        }
+
+
         if let Some(digest_id) = self.digest_id {
             //check if the chain has the same digest_id
             let chain = chains.iter().find( |chain| {
                 chain.blocks[0].digest_id() == digest_id as usize
             });
+            
             if let Some(chain) = chain {
                 //check if there is a index 
                 if let Some((index_start, index_end)) = self.index {
@@ -201,14 +218,21 @@ impl  ChainInfo {
                     let left = min_index.min(index_start as usize);
                     let right = max_index.max(index_end  as usize);
                     if left <= right {
-                        let blocks = chain.blocks[left..=right].to_vec();
+                        let blocks:Vec<B> :'a  = chain.blocks[left..=right].to_vec();
                         return Some(BlockChain {blocks});
                     }else {
                         //don't find a suitable block in this chain the by the index information.
                         return None;
                     }
                 }
-                //there is no index infomation, check if there is a timestamp.
+                //there is no index infomation.
+                //get the chain's information by iterating the chain.
+                let blocks = chain.blocks.iter().filter(
+                    |block| {
+                        if 
+                    }
+                )
+
 
 
                 
@@ -216,6 +240,23 @@ impl  ChainInfo {
             
         }
         return None;
+    }
+
+    ///this is a helper function for selecting a chain or segment from a list of chains
+    fn check_data_in_chains< B: Block + Clone>(
+            &self, 
+            data: [u8; 32], 
+            chains: &'a Vec<BlockChain<B>>) -> 
+        Option<&'a BlockChain<B>> 
+    {
+        let chain =chains.iter().find(|chain| {
+            chain.blocks.iter().any(
+                |block| {
+                    block.hash() == hash
+                }
+            )
+        }); 
+        return chain;
     }
 }
 
