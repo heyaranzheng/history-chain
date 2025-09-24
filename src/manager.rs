@@ -18,11 +18,21 @@ pub trait Manager {
 }
 
 
-pub struct ChainManager <'Keeper, B, D> 
+pub struct ChainManager < B, D> 
     where B: Block,
           D: Block + Digester,
 
 {
-    keeper: &'Keeper  mut ChainKeeper<B, D>,
+    keeper: ChainKeeper<B, D>,
+}
 
+impl < B, D> ChainManager<B, D> 
+    where B: Block + Clone,
+          D: Block + Digester + Clone,
+{
+    pub fn new() -> Self {
+        Self {
+            keeper: ChainKeeper::new(),
+        }
+    }
 }

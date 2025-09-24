@@ -64,11 +64,41 @@ pub trait Hasher {
 
   
     //caculate the merkle root by a given chain
-    fn merkle_root<B>(chain: &BlockChain<B>) -> HashValue 
-        where B: Block 
+    fn merkle_root <B> (chain: &BlockChain<B> ) -> Result<HashValue, HError>
+        where B: Block + Clone,
     {
-        //TODO: implement this function
-        constants::ZERO_HASH
+        let mut current_hashs: Vec<HashValue> = chain.iter().map(|b| b.hash().clone() ).collect();
+      
+        //deal with the empty chain 
+        if current_hashs.is_empty() {
+            return  Err(HError::Chain { message: format!("the chain is empty") });
+        }
+        loop {
+            current_hashs = Self::hash_neighbor(current_hashs); 
+            if  current_hashs.len() == 1 {
+                break;
+            }
+        }
+        let merkle_root = current_hashs[0].clone();
+        Ok(merkle_root)
+
+    }
+    //a helper function to caculate the merkle root by a given chain
+    fn hash_neighbor(hash_vec: Vec<HashValue> ) -> Vec<HashValue>{
+        let len = hash_vec.len();
+        let mut ret_vec: Vec<HashValue> = Vec::new();
+        for  i in (0..len).step_by(2){
+            let mut hasher = Sha256::new();
+            hasher.update(hash_vec[i] );
+            
+            //if the length of hash_vec is odd, will skip the step below.
+            if i + 1 < len {
+                hasher.update(hash_vec[i + 1 ] );
+            }
+            ret_vec.push(hasher.finalize().into());
+        }
+      
+        ret_vec
     }
 
 }

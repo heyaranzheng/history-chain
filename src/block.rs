@@ -1,6 +1,8 @@
 use bincode::{Encode, Decode};
 
-use crate::{chain::BlockChain, hash::HashValue};
+use crate::chain::BlockChain;
+use crate::hash::{Hasher, HashValue};
+use crate::herrors::HError;
 
 
 pub trait Block 
@@ -9,6 +11,10 @@ pub trait Block
     fn prev_hash(&self) -> HashValue;
     ///block has a hash value
     fn hash(&self) -> HashValue;
+    ///digest id or chain's id
+    fn digest_id(&self) -> usize;
+    ///the index of this block in it's chain
+    fn index(&self) -> usize;
 }
 
 ///have an ability to generate a merkle root by a given chain, store it in 
@@ -16,7 +22,7 @@ pub trait Block
 pub trait Digester {
     ///digester has a method to digest a chain.
     ///This is the method to caculate the merkle root of a given chain. 
-    fn digest<B: Block>(&mut self, chain: &BlockChain<B>) -> HashValue;
+    fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError>;
 }
 
 
@@ -44,6 +50,11 @@ impl Block for DataBlock {
     fn hash(&self) -> HashValue {
         self.hash
     }
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
+    }
+    
+
 }
 
 #[derive(Debug, Clone, Encode, Decode)]
@@ -71,10 +82,11 @@ impl Block for DigestBlock {
 }
 
 impl Digester for DigestBlock {
-    fn digest<B: Block>(&mut self, chain: &BlockChain<B>) -> HashValue {
-        let merkle_root = HashValue::merkle_root(chain);
+    fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError> 
+    {
+        let merkle_root = HashValue::merkle_root(chain)?;
         self.merkle_root = merkle_root;
-        merkle_root
+        Ok(merkle_root)
     }
 }
 

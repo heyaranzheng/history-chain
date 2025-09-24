@@ -1,7 +1,9 @@
 
+use tokio::sync::RwLock;
+
 use crate::block::{Block, Digester};
 use crate::herrors::HError;
-use crate::chain::{BlockChain, Chain, ChainInfo};
+use crate::chain::{BlockChain, Chain, ChainInfo, RwlockChain};
 
 
 pub struct ChainRef<B>
@@ -24,25 +26,25 @@ pub struct ChainKeeper  <B, D>
     where B: Block ,
           D: Block + Digester,
 {
-    main: BlockChain<D>,
-    sides: Vec<BlockChain<B>>,
+    main: RwLock<BlockChain<D>>,
+    sides: RwLock<Vec<BlockChain<B>>>,
 }
 
 impl <B, D> ChainKeeper<B, D>
-    where D: Block + Digester,
-          B: Block,
+    where D: Block + Clone + Digester,
+          B: Block + Clone,
 {
     pub fn new() -> Self {
         Self {
-            main: BlockChain::new(),
-            sides: Vec::new(),
+            main: RwLock::new(BlockChain::<D>::new()),
+            sides: RwLock::new(Vec::<BlockChain<B>>::new()),
         }
     }
 }
 
 impl <B, D> Keeper for ChainKeeper<B, D>
-    where D: Block + Digester,
-          B: Block 
+    where D: Block + Digester + Clone,
+          B: Block + Clone,
 {
     type DigestBlock = D;
     type DataBlock = B;
