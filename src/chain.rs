@@ -2,13 +2,15 @@
 
 use serde::Deserialize;
 use tokio::sync::RwLock;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::iter::Iterator;
 use bincode::{Decode, Encode};
 
-use crate::block::Block;
+use crate::block::{Block, Carrier};
 use crate::hash::HashValue;
 use crate::herrors::HError;
+
 
 
 
@@ -60,6 +62,42 @@ pub trait Chain
         }
         None
     }
+
+    ///This is a default implementation for getting a block by data_hash.
+    ///get a block by data_hash. 
+    ///need to implement an additional trait Carrier for the block
+    fn get_block_by_data_hash(&self, data_hash: HashValue) -> Option<Self::Block>
+        where Self::Block: Clone + Carrier
+    {
+        let len = self.len();
+        for i in 0..len {
+            if self.block_ref(i).unwrap().data_hash() == data_hash {
+                let block = self.block_ref(i ).cloned();
+                return block;
+            }
+        }
+
+        None
+    }
+
+    ///This is a default implementation for getting a block by data_uuid.
+    /// get a block by data_uuid. 
+    /// need to implement an additional trait Carrier for the block
+    fn get_block_by_data_uuid(&self, data_uuid: HashValue) -> Option<Self::Block>
+        where Self::Block: Clone + Carrier
+    {
+        let len = self.len();
+        for i in 0..len {
+            if self.block_ref(i).unwrap().data_uuid() == data_uuid {
+                let block = self.block_ref(i ).cloned();
+                return block;
+            }
+        }
+        None
+    }
+
+
+
  
 }
 
@@ -103,7 +141,7 @@ impl <B> Chain for BlockChain<B>
 {
     type Block = B;
     
-    fn block_ref(&self, index: usize) -> Option<& Self::B> {
+    fn block_ref(&self, index: usize) -> Option<& Self::Block> {
         let min_index = self.blocks[0].index();
         let len = self.blocks.len();
         let max_index = self.blocks[len -1 ].index();
@@ -135,6 +173,57 @@ pub struct ChainInfo {
     pub data_uuid: Option<HashValue>,
     pub data_hash: Option<HashValue>,
 }
+pub struct ChainRef<'a, B>
+    where B: Block
+{
+    data: *const B,
+    len: usize,
+    _marker: PhantomData<&'a B>
+}
+impl <'a, B> ChainRef<'a, B> 
+    where B: Block
+{
+    ///create a chain reference from a chain, we can chose a segment of the chain by passing
+    ///a range of index.
+    ///Note: this function don't make sure the range is valid, if the given range have some overlap
+    /// with the chain, it will return a reference to the overlap part, or return None.
+    pub fn  from_blockchain (
+        chain: &'a BlockChain<B>, 
+        (start, end): (usize, usize)) 
+        -> Result<Self, HError> 
+    { 
+        //check if the given range is valid
+        if start > end {
+            return Err(HError::Chain {
+                message: format!("start index is greater than end index")
+            })
+        }       
+        let len = chain.blocks.len();
+        let min_index = chain.blocks[0].index().max(start);
+        let max_index = chain.blocks[len -1 ].index().min(end);
+
+        
+        let offset = min_index - chain.blocks[0].index();
+        let len = max_index - min_index + 1;
+        return Ok(Self {
+            data: unsafe {
+                chain.blocks.as_ptr().add(offset)
+            },
+            len,
+            _marker: PhantomData
+        })
+    
+    }
+
+
+      
+
+
+       
+
+}
+
+unsafe impl <B:Block> Send for ChainRef<B> {}
 
 
 impl <'a> ChainInfo {
@@ -151,74 +240,12 @@ impl <'a> ChainInfo {
     }
 
     ///select a segment from a list of chains based on the information in the ChainInfo.
-    pub fn select_from <B: Block + Clone>(&self, chains: &'a Vec<BlockChain<B>>) -> 
-        Option<&'a BlockChain<B>> 
-
+    pub fn select_from <B: Block + Clone>(&self, chains: & BlockChain<B> ) -> Option<ChainRef<B>> 
     {
-        //check the hash first. 
-        if let Some(hash) = self.hash {
-            return self.check_data_in_chains(hash, chains);
-        }
 
-        //check the data_hash
-        if let Some(data_hash) = self.data_hash {
-            return self.check_data_in_chains(data_hash, chains);
-        }
-
-
-        if let Some(digest_id) = self.digest_id {
-            //check if the chain has the same digest_id
-            let chain = chains.iter().find( |chain| {
-                chain.blocks[0].digest_id() == digest_id as usize
-            });
-            
-            if let Some(chain) = chain {
-                //check if there is a index 
-                if let Some((index_start, index_end)) = self.index {
-                    let max_index = chain.blocks.len() ;
-                    let min_index = chain.blocks[0].index();
-                    let left = min_index.min(index_start as usize);
-                    let right = max_index.max(index_end  as usize);
-                    if left <= right {
-                        let blocks= chain.blocks[left..=right].to_vec();
-                        return Some(BlockChain {blocks});
-                    }else {
-                        //don't find a suitable block in this chain the by the index information.
-                        return None;
-                    }
-                }
-                //there is no index infomation.
-                //get the chain's information by iterating the chain.
-                let blocks = chain.blocks.iter().filter(
-                    |block| {
-                        if 
-                    }
-                )
-
-
-
-                
-            }
-            
-        }
-        return None;
     }
+  
 
-    ///this is a helper function for selecting a chain or segment from a list of chains
-    fn check_data_in_chains< B: Block + Clone>(
-            &self, 
-            data: [u8; 32], 
-            chains: &'a Vec<BlockChain<B>>) -> 
-        Option<&'a BlockChain<B>> 
-    {
-        let chain =chains.iter().find(|chain| {
-            chain.blocks.iter().any(
-                |block| {
-                    block.hash() == data
-                }
-            )
-        }); 
-        return chain;
-    }
+   
 }
 
