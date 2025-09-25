@@ -10,11 +10,57 @@ use crate::block::Block;
 use crate::hash::HashValue;
 use crate::herrors::HError;
 
+
+
 pub trait Chain  
 {
     type Block: Block;
-    //blocks in the object should have some kind of linear relationship.
-    async fn get_block(&self, index: u32) -> Option<Self::Block>;
+    ///blocks in the object should have some kind of linear relationship.
+    fn block_ref(&self, index: usize) -> Option<& Self::Block>;
+    ///chain has an exactly length 
+    fn len(&self) -> usize;
+
+
+    ///have an ablility to verify the chain. This is a default implementation.
+    fn verify(&self) -> Result<(), HError> {
+        let len = self.len();
+        if len == 0 || len == 1 {
+            return Err(HError::Chain { message: format!("empty or single block chain") });
+        }
+        for i in  0 .. len - 1  {
+            let hash = self.block_ref(i ).unwrap().hash();
+            let pre_hash = self.block_ref(i + 1 ).unwrap().prev_hash();
+            if hash != pre_hash {
+                return Err(HError::Chain { 
+                    message: format!("block {}'s hash  is not equal to block {}'s pre_hash ", i, i + 1 ) 
+                });
+            }
+        }
+        Ok(())
+    }
+
+    ///get a block by index. This is a default implementation.
+    #[inline]
+    fn get_block_by_index(&self, index: usize) -> Option<Self::Block>
+        where Self::Block: Clone
+    {
+        self.block_ref(index).cloned()
+    }
+
+    ///get a block by hash. This is a default implementation
+    fn get_block_by_hash(&self, hash: HashValue)-> Option<Self::Block>
+        where Self::Block: Clone
+    {
+        let len = self.len();
+        for i in 0..len {
+            if self.block_ref(i).unwrap().hash() == hash {
+                let block = self.block_ref(i ).cloned();
+                return block;
+            }
+        }
+        None
+    }
+ 
 }
 
 //Clone Debug Encode Decode PartialEq, Iterator are implemented for BlockChain<B> 
@@ -38,19 +84,8 @@ impl <B> BlockChain<B>
             blocks: Vec::<B>::with_capacity(capacity)
         }
     }
-    
-    pub async fn snap_rwlockChain(chain: RwlockChain<B>) -> Self {
-        Self {
-            blocks: chain.blocks.read().await.clone()
-        }
-    }
 
-    pub fn into_RwlockChain(self) -> RwlockChain<B> {
-        RwlockChain {
-            blocks: Arc::new(RwLock::new(self.blocks))
-        }
-    }
-
+    ///iterate the blocks in the chain.
     pub fn iter(&self) -> std::slice::Iter<B> {
         self.blocks.iter()
     }
@@ -61,98 +96,30 @@ impl <B> BlockChain<B>
         self.blocks.into_iter()
     }
 
-
 }
 
-
-#[derive(Debug, Clone)]
-pub struct RwlockChain<B> {
-   blocks: Arc<RwLock<Vec<B>>>,
-}
-
-
-impl <B> RwlockChain<B>
-    where B: Block + Clone
-{
-    #[inline]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            blocks: Arc::new(RwLock::new(Vec::<B>::with_capacity(capacity)))
-        }
-    }
-
-    #[inline]
-    pub fn new() -> Self {
-        Self {
-            blocks: Arc::new(RwLock::new(Vec::<B>::new()))
-        }
-    }
-
-    pub fn from_blockchain(chain: BlockChain<B>) -> Self {
-        Self {
-            blocks: Arc::new(RwLock::new(chain.blocks))
-        }
-    }
-    
-
-    ///returns the index of the last block in the chain.
-    pub async fn len(&self) -> usize {
-        let r =self.blocks.read().await;
-        r.len()
-    }
-
-    ///returns the capacity of the chain.
-    pub async fn capacity(&self) -> usize {
-        self.blocks.read().await.capacity()
-    }
-
-    ///returns the last block in the chain.
-    pub async fn tail(&self) -> Option<B> {
-        let r = self.blocks.read().await;
-        if r.len() > 0 {
-           Some(r[r.len() - 1].clone())
-        }else {
-            drop(r);
-            None
-        }
-    }
-    
-    ///returns the first block in the chain.
-    pub async fn head(&self) -> Option<B> {
-        let r = self.blocks.read().await;
-        if r.len() > 0 {
-            Some(r[0].clone())
-        }else {
-            drop(r);
-            None
-        }
-    }
-
-    ///This push will NOT extend the capacity of the chain if the chain is full.    
-    pub async fn push(&self, block: B)  {
-        let mut w = self.blocks.write().await;
-        w.push(block);
-    }
-
-
-}
-
-
-
-impl <B> Chain for RwlockChain<B>
+impl <B> Chain for BlockChain<B>
     where B: Block + Clone
 {
     type Block = B;
+    
+    fn block_ref(&self, index: usize) -> Option<& Self::B> {
+        let min_index = self.blocks[0].index();
+        let len = self.blocks.len();
+        let max_index = self.blocks[len -1 ].index();
 
-    async fn get_block(&self, index: u32) -> Option<Self::Block> {
-        let r = self.blocks.read().await;
-        if index < r.len() as u32 {
-            Some(r[index as usize].clone())
-        }else {
-            drop(r);
-            None
+        if index >= min_index && index <= max_index {
+            let offset = index - min_index;
+            return Some(&self.blocks[offset]);
         }
+
+        None
     }
+    
+    fn len(&self) -> usize {
+        self.blocks.len()  
+    } 
+    
 }
 
 
@@ -165,7 +132,7 @@ pub struct ChainInfo {
     pub timestamp: Option<(u64, u64)>,
     pub hash: Option<HashValue>,
     pub merkle_root: Option<HashValue>,
-    pub data_uuid: Option<u32>,
+    pub data_uuid: Option<HashValue>,
     pub data_hash: Option<HashValue>,
 }
 
@@ -192,11 +159,6 @@ impl <'a> ChainInfo {
         if let Some(hash) = self.hash {
             return self.check_data_in_chains(hash, chains);
         }
-        
-        //check the data_uuid
-        if let Some(data_uuid) = self.data_uuid {
-            return self.check_data_in_chains(data_uuid, chains);
-        }
 
         //check the data_hash
         if let Some(data_hash) = self.data_hash {
@@ -218,7 +180,7 @@ impl <'a> ChainInfo {
                     let left = min_index.min(index_start as usize);
                     let right = max_index.max(index_end  as usize);
                     if left <= right {
-                        let blocks:Vec<B> :'a  = chain.blocks[left..=right].to_vec();
+                        let blocks= chain.blocks[left..=right].to_vec();
                         return Some(BlockChain {blocks});
                     }else {
                         //don't find a suitable block in this chain the by the index information.
@@ -252,7 +214,7 @@ impl <'a> ChainInfo {
         let chain =chains.iter().find(|chain| {
             chain.blocks.iter().any(
                 |block| {
-                    block.hash() == hash
+                    block.hash() == data
                 }
             )
         }); 

@@ -13,7 +13,8 @@ pub trait Block
     fn hash(&self) -> HashValue;
     ///digest id or chain's id
     fn digest_id(&self) -> usize;
-    ///the index of this block in it's chain
+    ///the index of this block in it's chain, if this is a digest block, 
+    ///it's the same as the digest id.
     fn index(&self) -> usize;
 }
 
@@ -24,6 +25,16 @@ pub trait Digester {
     ///This is the method to caculate the merkle root of a given chain. 
     fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError>;
 }
+
+///have an ability to store data's hash value in it's own block, and return it's hash value.
+///have an ability to store data's uuid, which is a unique identifier of the data in some system.
+pub trait Carrier {
+    ///have an hash of data
+    fn data_hash(&self) -> HashValue;
+    ///have an uuid of data
+    fn data_uuid(&self) -> HashValue;
+}
+
 
 
 #[derive(Debug, Clone, Encode, Decode)]
@@ -37,25 +48,43 @@ pub struct DataBlock {
     //the hash of the some source data
     pub data_hash: HashValue,
     //the surce data's uuid in some system
-    pub data_uuid: u32,
+    pub data_uuid: HashValue,
     //the id of the digest block which will disgest this block
     pub digest_id: u32,
     //the index of this block in it's chain
     pub index: u32,
 }
 impl Block for DataBlock {
+    #[inline]
     fn prev_hash(&self) -> HashValue {
         self.prev_hash
     }
+    #[inline]
     fn hash(&self) -> HashValue {
         self.hash
     }
+    #[inline]
     fn digest_id(&self) -> usize {
         self.digest_id as usize
     }
-    
-
+    #[inline]
+    fn index(&self) -> usize {
+        self.index as usize
+    }
 }
+
+impl Carrier for DataBlock {
+    #[inline]
+    fn data_hash(&self) -> HashValue {
+        self.data_hash
+    }
+    #[inline]
+    fn data_uuid(&self) -> HashValue {
+        self.data_uuid
+    }
+}
+
+
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct DigestBlock {
@@ -79,7 +108,15 @@ impl Block for DigestBlock {
     fn hash(&self) -> HashValue {
         self.hash
     }
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
+    }
+    ///return the digest id as the index of this block in it's chain
+    fn index(&self) -> usize {
+        self.digest_id as usize
+    }
 }
+
 
 impl Digester for DigestBlock {
     fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError> 

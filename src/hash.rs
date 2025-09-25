@@ -1,4 +1,6 @@
 
+use std::fmt::Display;
+
 use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 use async_trait::async_trait;
@@ -105,3 +107,4 @@ pub trait Hasher {
 
 #[async_trait]
 impl Hasher for HashValue {}
+
