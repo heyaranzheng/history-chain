@@ -24,17 +24,32 @@ pub trait Chain
 
 
     ///have an ablility to verify the chain. This is a default implementation.
+    ///verify the chain by hash and index order.
     fn verify(&self) -> Result<(), HError> {
         let len = self.len();
         if len == 0 || len == 1 {
             return Err(HError::Chain { message: format!("empty or single block chain") });
         }
-        for i in  0 .. len - 1  {
-            let hash = self.block_ref(i ).unwrap().hash();
-            let pre_hash = self.block_ref(i + 1 ).unwrap().prev_hash();
+        //the max i is len - 2, because the last block has no next block to compare.
+        for i in  0 .. len - 2  {
+            let block_ref = self.block_ref(i ).unwrap();
+            let next_block_ref = self.block_ref(i + 1 ).unwrap();
+
+            //verify the hash of each block
+            let hash = block_ref.hash();
+            let pre_hash = next_block_ref.prev_hash();
             if hash != pre_hash {
                 return Err(HError::Chain { 
                     message: format!("block {}'s hash  is not equal to block {}'s pre_hash ", i, i + 1 ) 
+                });
+            }
+
+            //verify the index of each block, check if the index is in order.
+            let index = block_ref.index();
+            let next_index = next_block_ref.index();
+            if next_index != index + 1 {
+                return Err(HError::Chain {
+                    message: format!("block {}'s index is not equal to block {}'s index + 1", i, i + 1 )
                 });
             }
         }
@@ -86,7 +101,7 @@ pub trait Chain
     fn get_block_by_data_uuid(&self, data_uuid: HashValue) -> Option<Self::Block>
         where Self::Block: Clone + Carrier
     {
-        let len = self.len();
+        let len = self.len(); 
         for i in 0..len {
             if self.block_ref(i).unwrap().data_uuid() == data_uuid {
                 let block = self.block_ref(i ).cloned();
@@ -95,8 +110,6 @@ pub trait Chain
         }
         None
     }
-
-
 
  
 }
@@ -134,6 +147,7 @@ impl <B> BlockChain<B>
         self.blocks.into_iter()
     }
 
+
 }
 
 impl <B> Chain for BlockChain<B>
@@ -160,19 +174,6 @@ impl <B> Chain for BlockChain<B>
     
 }
 
-
-
-
-//this is used to store the information of a chain for searching.
-pub struct ChainInfo {
-    pub digest_id: Option<u32>,
-    pub index: Option<(u32, u32)>,
-    pub timestamp: Option<(u64, u64)>,
-    pub hash: Option<HashValue>,
-    pub merkle_root: Option<HashValue>,
-    pub data_uuid: Option<HashValue>,
-    pub data_hash: Option<HashValue>,
-}
 pub struct ChainRef<'a, B>
     where B: Block
 {
@@ -191,7 +192,16 @@ impl <'a, B> ChainRef<'a, B>
         chain: &'a BlockChain<B>, 
         (start, end): (usize, usize)) 
         -> Result<Self, HError> 
-    { 
+        where B: Block + Clone
+    {
+        //check if the given chain is valid 
+        chain.verify()?;
+        if chain.blocks.len() == 0 {
+            return Err(HError::Chain {
+                message: format!("empty chain")
+            })
+        }
+
         //check if the given range is valid
         if start > end {
             return Err(HError::Chain {
@@ -211,19 +221,124 @@ impl <'a, B> ChainRef<'a, B>
             },
             len,
             _marker: PhantomData
-        })
-    
+        }) 
     }
 
+    ///check if the ChainRef ccontains a block with the given hash.
+    pub fn contain_hash(&self, hash: HashValue) -> Option<B>
+        where B: Clone + Block
+    {
+        let len = self.len;
+        for  i in 0..len {
+            let block = unsafe {
+                &*self.data.add(i)
+            };
+            if block.hash() == hash {
+                return Some(block.clone());
+            }
+        }
+        None
+    }   
+    
+    ///check if the ChainRef contains a block with the given data_hash.
+    pub fn contain_data_hash(&self, data_hash: HashValue) -> Option<B>
+        where B: Clone + Block + Carrier
+    {
+        let len = self.len;
+        for  i in 0..len {
+            let block = unsafe {
+                &*self.data.add(i)
+            };
+            if block.data_hash() == data_hash {
+                return Some(block.clone());
+            }
+        }
+        None
+    }
 
-      
+    ///check if the ChainRef contains a block with the given data_uuid.
+    pub fn contain_uuid(&self, uuid: HashValue) -> Option<B>
+        where B: Clone + Block + Carrier
+    {
+        let len = self.len;
+        for  i in 0..len {
+            let block = unsafe {
+                &*self.data.add(i)
+            };
+            if block.data_uuid() == uuid {
+                return Some(block.clone());
+            }
+        }
+        None
+    }
 
+    ///check if the ChainRef contains a block with the given index.
+    pub fn contain_index(&self, index: usize) -> Option<B>
+        where B: Clone + Block
+    {
+        let len = self.len;
+        for  i in 0..len {
+            let block = unsafe {
+                &*self.data.add(i)
+            };
+            if block.index() == index {
+                return Some(block.clone());
+            }
+        }
+        None
+    }
+    
+    ///get this ChainRef's
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
 
-       
+    pub fn as_slice(&self) -> &[B] {
+        unsafe {
+            std::slice::from_raw_parts(self.data, self.len)
+        }
+    }
+
+    ///COPY the data this ChainRef points to, and return a new BlockChain, 
+    ///not a reference of pointer.
+    pub fn copy(&self) -> BlockChain<B>
+        where B: Clone + Block
+    {
+        let mut chain = BlockChain::<B>::new();
+        chain.blocks.extend_from_slice(self.as_slice());
+        chain
+    }
 
 }
 
-unsafe impl <B:Block> Send for ChainRef<B> {}
+impl <'a, B> Clone for ChainRef<'a, B> 
+    where B: Block
+{
+    fn clone(&self) -> Self {
+        Self {
+            data: self.data,
+            len: self.len,
+            _marker: PhantomData
+        }
+    }
+}
+
+
+
+//this is used to store the information of a chain for searching.
+pub struct ChainInfo {
+    pub digest_id: Option<u32>,
+    pub index: Option<(u32, u32)>,
+    pub timestamp: Option<(u64, u64)>,
+    pub hash: Option<HashValue>,
+    pub merkle_root: Option<HashValue>,
+    pub data_uuid: Option<HashValue>,
+    pub data_hash: Option<HashValue>,
+}
+
+
+unsafe impl <B:Block> Send for ChainRef<'_, B> {}
 
 
 impl <'a> ChainInfo {
@@ -240,12 +355,13 @@ impl <'a> ChainInfo {
     }
 
     ///select a segment from a list of chains based on the information in the ChainInfo.
-    pub fn select_from <B: Block + Clone>(&self, chains: & BlockChain<B> ) -> Option<ChainRef<B>> 
+    pub fn select_from < B: Block + Clone>(&self, chains: &'a BlockChain<B> ) -> Option<ChainRef<'a, B>> 
     {
-
+        
     }
   
 
    
 }
+
 
