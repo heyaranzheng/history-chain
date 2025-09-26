@@ -1,7 +1,5 @@
 
 
-use serde::Deserialize;
-use tokio::sync::RwLock;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::iter::Iterator;
@@ -123,7 +121,7 @@ pub struct BlockChain<B>
 }
 
 impl <B> BlockChain<B>
-    where B: Block + Clone
+    where B: Block
 {
     pub fn new() -> Self {
         Self {
@@ -134,6 +132,22 @@ impl <B> BlockChain<B>
         Self {
             blocks: Vec::<B>::with_capacity(capacity)
         }
+    }
+    
+    ///select a segment from the chain
+    pub fn index_select(&self, range: (usize, usize))
+        -> Result<ChainRef<B>, HError>
+        where B: Block,
+    {
+        let chain_ref = ChainRef::from_chain_by_index(self, range)?;
+        Ok(chain_ref)
+    }
+
+    #[inline]
+    pub fn hash_select(&self, hash_range: (HashValue, HashValue)) -> Result<ChainRef<B>, HError>
+        where B: Block,
+    {
+        ChainRef::from_chain_by_hash(self, hash_range)
     }
 
     ///iterate the blocks in the chain.
@@ -151,11 +165,12 @@ impl <B> BlockChain<B>
 }
 
 impl <B> Chain for BlockChain<B>
-    where B: Block + Clone
+    where B: Block
 {
     type Block = B;
     
-    fn block_ref(&self, index: usize) -> Option<& Self::Block> {
+    fn block_ref(&self, index: usize) -> Option<& Self::Block> 
+    {
         let min_index = self.blocks[0].index();
         let len = self.blocks.len();
         let max_index = self.blocks[len -1 ].index();
@@ -174,6 +189,9 @@ impl <B> Chain for BlockChain<B>
     
 }
 
+
+///this is a reference to a segment of a chain, it contains a pointer to the data,
+///and the length of the segment of the chain.
 pub struct ChainRef<'a, B>
     where B: Block
 {
@@ -184,29 +202,43 @@ pub struct ChainRef<'a, B>
 impl <'a, B> ChainRef<'a, B> 
     where B: Block
 {
+    #[inline]
+    fn new(data: *const B, len: usize) -> Self {
+        Self {
+            data,
+            len,
+            _marker: PhantomData
+        }
+    }
+
+
     ///create a chain reference from a chain, we can chose a segment of the chain by passing
     ///a range of index.
     ///Note: this function don't make sure the range is valid, if the given range have some overlap
     /// with the chain, it will return a reference to the overlap part, or return None.
-    pub fn  from_blockchain (
+    ///
+    /// Note: The chain we have now, may be a segment of completed chain, so the index is not the 
+    /// ordering number of the block in this chain, but the index of the whole completed chain.
+    /// Namely, chain.blocks[i].index() may not equal to i.
+    pub fn  from_chain_by_index(
         chain: &'a BlockChain<B>, 
         (start, end): (usize, usize)) 
         -> Result<Self, HError> 
-        where B: Block + Clone
+        where B: Block
     {
         //check if the given chain is valid 
         chain.verify()?;
         if chain.blocks.len() == 0 {
             return Err(HError::Chain {
                 message: format!("empty chain")
-            })
+            });
         }
 
         //check if the given range is valid
         if start > end {
             return Err(HError::Chain {
                 message: format!("start index is greater than end index")
-            })
+            });
         }       
         let len = chain.blocks.len();
         let min_index = chain.blocks[0].index().max(start);
@@ -221,8 +253,70 @@ impl <'a, B> ChainRef<'a, B>
             },
             len,
             _marker: PhantomData
-        }) 
+        });
     }
+
+    ///return a reference to the whole chain.
+    pub fn from_chain(chain: &'a BlockChain<B>) -> Self
+        where B: Block
+    {
+        let len = chain.blocks.len();
+        Self {
+            data: chain.blocks.as_ptr(),
+            len,
+            _marker: PhantomData
+        }
+    }
+    
+    pub fn from_chain_by_hash(chain: &'a BlockChain<B>, hash_range: (HashValue, HashValue)) 
+        -> Result<Self, HError> 
+    {
+        //verify the chain first
+        chain.verify()?;
+      
+        //if we find a block with any of the given hash, we will store the ordering number of the block
+        //into the range_index vector.
+        let mut range_index = Vec::new();
+        for  i in 0..chain.blocks.len() {
+            if chain.blocks[i].hash() == hash_range.0 ||
+                chain.blocks[i].hash() == hash_range.1 
+            {
+                range_index.push(i);
+                if range_index.len() == 2 {
+                    break;
+                }
+            }
+        }
+        match range_index.len() {
+            1 => {
+                //check if the two given hash are same
+                if hash_range.0 == hash_range.1 {
+                    let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
+                    return Ok(Self::new(data, 1));
+                }else {
+                    return Err(HError::Chain {
+                        message: format!("only one block with the given hash") 
+                    });
+                }
+            }
+            2 => {
+                if range_index[0] > range_index[1] {
+                    range_index.swap(0, 1);
+                }
+                let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
+                let len = range_index[1] - range_index[0] + 1;
+                return Ok(Self::new(data, len));
+            }
+            _ => {
+                return Err(HError::Chain {
+                    message: format!("more than two blocks with the given hash")
+                });
+            }
+        }
+      
+
+    }
+
 
     ///check if the ChainRef ccontains a block with the given hash.
     pub fn contain_hash(&self, hash: HashValue) -> Option<B>
@@ -294,6 +388,7 @@ impl <'a, B> ChainRef<'a, B>
         self.len
     }
 
+    ///get a slice of the data this ChainRef points to.
     pub fn as_slice(&self) -> &[B] {
         unsafe {
             std::slice::from_raw_parts(self.data, self.len)
@@ -312,6 +407,8 @@ impl <'a, B> ChainRef<'a, B>
 
 }
 
+///Clone the ChainRef itself, not the data it points to.
+///Use function "copy" to get a new BlockChain with the data this ChainRef points to.
 impl <'a, B> Clone for ChainRef<'a, B> 
     where B: Block
 {
@@ -323,7 +420,6 @@ impl <'a, B> Clone for ChainRef<'a, B>
         }
     }
 }
-
 
 
 //this is used to store the information of a chain for searching.
@@ -353,14 +449,6 @@ impl <'a> ChainInfo {
             data_hash: None,
         }
     }
-
-    ///select a segment from a list of chains based on the information in the ChainInfo.
-    pub fn select_from < B: Block + Clone>(&self, chains: &'a BlockChain<B> ) -> Option<ChainRef<'a, B>> 
-    {
-        
-    }
-  
-
    
 }
 

@@ -3,7 +3,7 @@ use tokio::sync::RwLock;
 
 use crate::block::{Block, Digester};
 use crate::herrors::HError;
-use crate::chain::{BlockChain, Chain, ChainInfo, RwlockChain};
+use crate::chain::{BlockChain, Chain, ChainInfo, };
 
 
 pub struct ChainRef<B>
