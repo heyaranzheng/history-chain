@@ -1,15 +1,12 @@
-
-use std::fmt::Display;
-
+use rand::Rng;
 use tokio::io::AsyncReadExt;
-use uuid::Uuid;
 use async_trait::async_trait;
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
+use chrono::Utc;
 
-use crate::constants;
+
 use crate::{constants::ZERO_HASH, herrors::HError}; 
-use crate::network::protocol::Message;
 use crate::chain::BlockChain;
 use crate::block::Block;
 
@@ -26,14 +23,20 @@ pub trait Hasher {
     }
 
     //create a random hash for testing purpose.
-    #[inline]
-    fn random() -> HashValue {
-        let uuid = Uuid::now_v7();
+      ///returns a random hash value
+    fn random_hash() -> HashValue {
+        let mut rng = rand::thread_rng();
+        let random_hash: [u8; 32] = rng.r#gen();
+        let timestamp = Utc::now().timestamp().to_be_bytes();
+
         let mut hasher = Sha256::new();
-        hasher.update(uuid.as_bytes());
-        let hash:[u8; 32] = hasher.finalize().into();
-        hash
+        hasher.update(&random_hash);
+        hasher.update(&timestamp);
+
+        let result: HashValue = hasher.finalize().into();
+        result
     }
+
 
     //hash a file by chunks and return the final hash.
     async fn hash_with_chunk_size(file_path: &str, chunk_size: usize) -> Result<HashValue, HError>{
@@ -65,7 +68,7 @@ pub trait Hasher {
     }
 
   
-    //caculate the merkle root by a given chain
+    ///caculate the merkle root by a given chain
     fn merkle_root <B> (chain: &BlockChain<B> ) -> Result<HashValue, HError>
         where B: Block + Clone,
     {
@@ -85,7 +88,7 @@ pub trait Hasher {
         Ok(merkle_root)
 
     }
-    //a helper function to caculate the merkle root by a given chain
+    ///a helper function to caculate the merkle root by a given chain
     fn hash_neighbor(hash_vec: Vec<HashValue> ) -> Vec<HashValue>{
         let len = hash_vec.len();
         let mut ret_vec: Vec<HashValue> = Vec::new();

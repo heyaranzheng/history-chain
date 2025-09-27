@@ -453,6 +453,5 @@ impl <'a> ChainInfo {
             data_hash: None,
         }
     }
-   
 }
 

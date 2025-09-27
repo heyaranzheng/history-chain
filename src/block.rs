@@ -17,17 +17,14 @@ pub trait Block
     fn prev_hash(&self) -> HashValue;
     ///block has a hash value
     fn hash(&self) -> HashValue;
-    ///digest id or chain's id
-    fn digest_id(&self) -> usize;
     ///the index of this block in it's chain, if this is a digest block, 
     ///it's the same as the digest id.
     fn index(&self) -> usize;
-  
 }
 
 ///have an ability to generate a merkle root by a given chain, store it in 
 ///itself if we can, and return it.
-pub trait Digester {
+pub trait Digester: Block {
     ///digester has a method to digest a chain.
     ///This is the method to caculate the merkle root of a given chain. 
     fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError>;
@@ -35,11 +32,13 @@ pub trait Digester {
 
 ///have an ability to store data's hash value in it's own block, and return it's hash value.
 ///have an ability to store data's uuid, which is a unique identifier of the data in some system.
-pub trait Carrier {
+pub trait Carrier : Block {
     ///have an hash of data
     fn data_hash(&self) -> HashValue;
     ///have an uuid of data
     fn data_uuid(&self) -> HashValue;
+    ///digest id or chain's id
+    fn digest_id(&self) -> usize;
 }
 
 ///This is a marker trait for struct which can be used as args to create a new block.
@@ -160,10 +159,6 @@ impl Block for DataBlock {
         self.hash
     }
     #[inline]
-    fn digest_id(&self) -> usize {
-        self.digest_id as usize
-    }
-    #[inline]
     fn index(&self) -> usize {
         self.index as usize
     }
@@ -188,6 +183,10 @@ impl Carrier for DataBlock {
     #[inline]
     fn data_uuid(&self) -> HashValue {
         self.data_uuid
+    }
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
     }
 }
 
@@ -259,15 +258,8 @@ impl Block for DigestBlock {
     fn hash(&self) -> HashValue {
         self.hash
     }
-
-    ///NOTE: return the digest id as the index of this block in it's chain
-    ///     self.digest_id == self.index
-    #[inline]
-    fn digest_id(&self) -> usize {
-        self.digest_id as usize
-    }
-    ///NOTE: return the digest id as the index of this block in it's chain
-    ///     self.digest_id == self.index
+    ///digestblock's index is equal to the digest id of datablock 
+    ///which has been disgested by it.
     #[inline]
     fn index(&self) -> usize {
         self.digest_id as usize

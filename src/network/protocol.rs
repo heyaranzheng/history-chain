@@ -1,6 +1,7 @@
 use std::mem::MaybeUninit;
 use std::net::{SocketAddr};
 use bincode::{Decode, Encode, config};
+use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite,};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
@@ -12,7 +13,7 @@ use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
 use crate::network::identity::Identity;
 use crate::pipe::Pipe;
-use crate::block::{Block};
+use crate::block::{Block, BlockArgs};
 
 ///the signature of the message.
 type SignatureBytes = [u8; 64];
@@ -34,6 +35,9 @@ impl Header {
         Self { length, signature, public_key}
     }
 
+    ///the size of the header in bytes.
+    ///4 + 64 + 32 = 100.
+    ///4: length, 64: signature, 32: public_key.
     #[inline]
     pub fn header_size() -> usize {
         100
@@ -174,6 +178,42 @@ pub struct RequestInfo {
 
 unsafe impl Send for MessageType {}
 
+pub struct VoteBlockArgs {
+    pub prev_hash: HashValue,
+    pub expire_time: u64,
+    pub block_hash: HashValue,
+    pub voter: HashValue,
+    pub vote: bool,
+    pub suspected_block: HashValue,
+    pub result: f32,
+    pub index: usize,
+}
+
+impl VoteBlockArgs {
+    pub fn new(
+        prev_hash: HashValue,
+        expire_time: u64,
+        block_hash: HashValue,
+        voter: HashValue,
+        vote: bool,
+        suspected_block: HashValue,
+        result: f32,
+        index: usize,
+    ) -> Self {
+        Self {
+            prev_hash,
+            expire_time,
+            block_hash,
+            voter,
+            vote,
+            suspected_block,
+            result,
+            index,
+        }
+    }
+}
+impl BlockArgs for VoteBlockArgs {}
+
 /// There is no poller's name and timestamp because the first voteblock in the chain is the poller, 
 /// we can get the information from the first block of the chain (not the genesis block, the poller's
 /// block is the second block strictly speaking in the chain).
@@ -199,12 +239,52 @@ pub struct VoteBlock {
     suspected_block: HashValue,
     ///the consensus of the network, the result will be a number between 0 and 1,
     result: f32,
-    ///the digest id of the block
-    digest_id: usize,
     ///the index of the block in the chain
     index: usize,
 }
+impl VoteBlock {
+    fn private_new(
+        prev_hash: HashValue,
+        expire_time: u64,
+        block_hash: HashValue,
+        voter: HashValue,
+        vote: bool,
+        suspected_block: HashValue,
+        result: f32,
+        index: usize,
+    ) -> Self {
+        let timestamp = chrono::Utc::now().timestamp() as u64;
+
+        //hash the block.
+        let mut hasher = Sha256::new();
+        hasher.update(prev_hash);
+        hasher.update(timestamp.to_be_bytes());
+        hasher.update(expire_time.to_be_bytes());
+        hasher.update(block_hash);
+        hasher.update(voter);
+        hasher.update(vote.to_string().as_bytes());
+        hasher.update(suspected_block);
+        hasher.update(result.to_be_bytes());
+        hasher.update(index.to_be_bytes());
+        let hash:HashValue = hasher.finalize().into();
+        Self {
+            hash,
+            prev_hash,
+            expire_time,
+            block_hash,
+            voter,
+            vote,
+            timestamp,
+            suspected_block,
+            result,
+            index,
+        }
+    }
+}
+
+
 impl Block for VoteBlock {
+    type Args = VoteBlockArgs;
     #[inline]
     fn hash(&self) -> HashValue {
         self.hash
@@ -213,14 +293,22 @@ impl Block for VoteBlock {
     fn prev_hash(&self) -> HashValue {
         self.prev_hash
     }
-
-    #[inline]
-    fn digest_id(&self) -> usize {
-        self.digest_id
-    }
+ 
     #[inline]
     fn index(&self) -> usize {
         self.index
+    }
+    fn create(args: Self::Args ) -> Self {
+        Self::private_new(
+            args.prev_hash,
+            args.expire_time,
+            args.block_hash,
+            args.voter,
+            args.vote,
+            args.suspected_block,
+            args.result,
+            args.index,
+        )
     }
 }
 
