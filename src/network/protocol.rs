@@ -199,6 +199,10 @@ pub struct VoteBlock {
     suspected_block: HashValue,
     ///the consensus of the network, the result will be a number between 0 and 1,
     result: f32,
+    ///the digest id of the block
+    digest_id: usize,
+    ///the index of the block in the chain
+    index: usize,
 }
 impl Block for VoteBlock {
     #[inline]
@@ -209,7 +213,17 @@ impl Block for VoteBlock {
     fn prev_hash(&self) -> HashValue {
         self.prev_hash
     }
+
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id
+    }
+    #[inline]
+    fn index(&self) -> usize {
+        self.index
+    }
 }
+
 
 
 
@@ -368,13 +382,10 @@ impl Handler for MessageHandler {
         //TO DO
         Ok(())
     }
-    async fn handle_chain_request(&self, msg: Message, dst_addr: String) -> Result<(), HError> {
-        //connect to the requested node,
-      
+    fn handle_chain_request(&self, msg: Message) -> Result<(), HError> {
         //TO DO
         Ok(())
     }
-    
  
     
     fn handle_vote_block(&self, msg: Message) -> Result<(), HError> {

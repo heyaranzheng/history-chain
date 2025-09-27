@@ -1,20 +1,10 @@
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpStream, UdpSocket, TcpListener};
-use std::net::SocketAddr;
-use std::collections::{HashMap, VecDeque};
-use std::pin::Pin;
+use std::collections::HashMap;
 use async_trait::async_trait;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use std::sync::Arc;
 
+
+use crate::block::{Block, Carrier, Digester};
 use crate::manager::ChainManager;
-use crate::constants::{
-    MAX_CONNECTIONS , UDP_SENDER_PORT, UDP_RECV_PORT, TCP_SENDER_PORT, 
-    TCP_RECV_PORT, MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, MTU_SIZE};
-use crate::herrors::HError;
-use crate::network::protocol::{Message, MessageType};
-use crate::hash:: {HashValue, Hasher};
+use crate::hash:: HashValue;
 
 
 #[async_trait]
@@ -22,7 +12,7 @@ pub trait Node {
     ///check if the node is the center node
     fn is_center(&self) -> bool;
     ///get a friend's node information by its name
-    fn get_friend(&self, name: HashValue) -> Option<&UserNode>{None}
+    fn get_friend(&self, name: HashValue) -> Option<&Self>{None}
     ///get node's name
     fn my_name(&self) -> HashValue;
     ///get node's address
@@ -57,7 +47,10 @@ pub enum NodeState {
 
 type NodeName = HashValue;
 
-pub struct UserNode {
+pub struct UserNode<B, D> 
+    where B: Block ,
+          D: Block + Digester
+{
     ///name of the node
     pub name: NodeName,
     ///address of the node
@@ -65,17 +58,20 @@ pub struct UserNode {
     ///node's birthday
     pub timestamp: u64,
     ///friend nodes, HashMap<name, UserNode>
-    pub friends: HashMap< NodeName, UserNode>,
+    pub friends: HashMap< NodeName, UserNode<B, D>>,
     pub center_address: Option<String>,
     ///chain's manager
-    pub chain_manager: Option<ChainManager>,
+    pub chain_manager: Option<ChainManager<B, D>>,
     ///node's status
     pub reputation: Reputation,
     ///node's state
     pub state: NodeState,
 }
 
-impl UserNode {
+impl <B, D> UserNode <B, D>
+    where B: Block ,
+          D: Block + Digester
+{
     pub fn new(name: NodeName, capacity: usize) -> Self {
         Self {
             name,
@@ -91,7 +87,10 @@ impl UserNode {
 }
  
 #[async_trait]
-impl Node for UserNode {
+impl <B, D> Node for UserNode<B, D>
+    where B: Block ,
+          D: Block + Digester 
+{
     fn is_center(&self) -> bool {
         false
     }

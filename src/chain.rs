@@ -1,7 +1,6 @@
 
 
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::iter::Iterator;
 use bincode::{Decode, Encode};
 
@@ -150,6 +149,7 @@ impl <B> BlockChain<B>
         ChainRef::from_chain_by_hash(self, hash_range)
     }
 
+
     ///iterate the blocks in the chain.
     pub fn iter(&self) -> std::slice::Iter<B> {
         self.blocks.iter()
@@ -214,11 +214,11 @@ impl <'a, B> ChainRef<'a, B>
 
     ///create a chain reference from a chain, we can chose a segment of the chain by passing
     ///a range of index.
-    ///Note: this function don't make sure the range is valid, if the given range have some overlap
-    /// with the chain, it will return a reference to the overlap part, or return None.
+    ///Note:  if the given range have some overlap with the chain's index range, it will return  
+    /// a reference to the overlap part, or return None.
     ///
     /// Note: The chain we have now, may be a segment of completed chain, so the index is not the 
-    /// ordering number of the block in this chain, but the index of the whole completed chain.
+    /// ordering number of the block in its chain, but the index of the whole completed chain.
     /// Namely, chain.blocks[i].index() may not equal to i.
     pub fn  from_chain_by_index(
         chain: &'a BlockChain<B>, 
@@ -268,6 +268,9 @@ impl <'a, B> ChainRef<'a, B>
         }
     }
     
+
+    ///create a chain reference from a chain, we can chose a segment of the chain by passing
+    ///a range of hash.
     pub fn from_chain_by_hash(chain: &'a BlockChain<B>, hash_range: (HashValue, HashValue)) 
         -> Result<Self, HError> 
     {
@@ -300,6 +303,7 @@ impl <'a, B> ChainRef<'a, B>
                 }
             }
             2 => {
+                //change the order of the range_index if the first index is greater than the second index
                 if range_index[0] > range_index[1] {
                     range_index.swap(0, 1);
                 }
@@ -318,7 +322,7 @@ impl <'a, B> ChainRef<'a, B>
     }
 
 
-    ///check if the ChainRef ccontains a block with the given hash.
+    ///check if the ChainRef contains a block with the given hash.
     pub fn contain_hash(&self, hash: HashValue) -> Option<B>
         where B: Clone + Block
     {
@@ -451,5 +455,4 @@ impl <'a> ChainInfo {
     }
    
 }
-
 

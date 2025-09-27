@@ -1,4 +1,6 @@
 use bincode::{Encode, Decode};
+use chrono::Utc;
+use sha2::{Digest, Sha256};
 
 use crate::chain::BlockChain;
 use crate::hash::{Hasher, HashValue};
@@ -7,6 +9,10 @@ use crate::herrors::HError;
 
 pub trait Block 
 {
+    ///we will use this args list to create a new block
+    type Args: BlockArgs; 
+    ///create a new block with a args list
+    fn create(args: Self::Args ) -> Self;
     ///block has a connection to the previous block
     fn prev_hash(&self) -> HashValue;
     ///block has a hash value
@@ -16,6 +22,7 @@ pub trait Block
     ///the index of this block in it's chain, if this is a digest block, 
     ///it's the same as the digest id.
     fn index(&self) -> usize;
+  
 }
 
 ///have an ability to generate a merkle root by a given chain, store it in 
@@ -35,7 +42,59 @@ pub trait Carrier {
     fn data_uuid(&self) -> HashValue;
 }
 
+///This is a marker trait for struct which can be used as args to create a new block.
+pub trait BlockArgs {}
 
+pub struct DataBlockArgs {
+    pub prev_hash: HashValue,
+    pub data_hash: HashValue,
+    pub data_uuid: HashValue,
+    pub digest_id: u32,
+    pub index: u32,
+}
+impl DataBlockArgs {
+    pub fn new(
+        prev_hash: HashValue,
+        data_hash: HashValue,
+        data_uuid: HashValue,
+        digest_id: u32,
+        index: u32,
+    ) -> Self {
+        Self {
+            prev_hash,
+            data_hash,
+            data_uuid,
+            digest_id,
+            index,
+        }
+    }
+}
+
+impl BlockArgs for DataBlockArgs {}
+
+pub struct DigestBlockArgs {
+    pub prev_hash: HashValue,
+    pub merkle_root: HashValue,
+    pub length: u32,
+    pub digest_id: u32,
+}
+impl DigestBlockArgs {
+    pub fn new(
+        prev_hash: HashValue,
+        merkle_root: HashValue,
+        length: u32,
+        digest_id: u32,
+    ) -> Self {
+        Self {
+            prev_hash,
+            merkle_root,
+            length,
+            digest_id,
+        }
+    }   
+}
+
+impl BlockArgs for DigestBlockArgs {}
 
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct DataBlock {
@@ -54,7 +113,44 @@ pub struct DataBlock {
     //the index of this block in it's chain
     pub index: u32,
 }
+impl DataBlock {
+    fn private_new(
+        prev_hash: HashValue, 
+        data_hash: HashValue, 
+        data_uuid: HashValue, 
+        digest_id: u32, 
+        index: u32) 
+        -> Self 
+    {
+        let timestamp = Utc::now().timestamp() as u64;
+
+        //hash the block with its fields
+        let mut hasher = Sha256::new();
+        hasher.update(timestamp.to_be_bytes());
+        hasher.update(&prev_hash);
+        hasher.update(&data_hash);
+        hasher.update(&data_uuid);
+        hasher.update(&digest_id.to_be_bytes());
+        hasher.update(&index.to_be_bytes());
+        let hash: HashValue = hasher.finalize().into();
+
+        Self {
+            hash,
+            timestamp,
+            prev_hash,
+            data_hash,
+            data_uuid,
+            digest_id,
+            index,
+        }
+    }
+
+
+}
+
+
 impl Block for DataBlock {
+    type Args = DataBlockArgs;
     #[inline]
     fn prev_hash(&self) -> HashValue {
         self.prev_hash
@@ -70,6 +166,17 @@ impl Block for DataBlock {
     #[inline]
     fn index(&self) -> usize {
         self.index as usize
+    }
+
+    #[inline]
+    fn create(args: Self::Args ) -> Self {
+        Self::private_new(
+            args.prev_hash,
+            args.data_hash,
+            args.data_uuid,
+            args.digest_id,
+            args.index,
+        )  
     }
 }
 
@@ -101,19 +208,79 @@ pub struct DigestBlock {
     //the length of the chain which is belonged to this block
     pub length: u32,
 }
+
+impl DigestBlock {
+    fn private_new(
+        prev_hash: HashValue, 
+        merkle_root: HashValue, 
+        length: u32, 
+        digest_id: u32) 
+        -> Self 
+    {
+        let timestamp = Utc::now().timestamp() as u64;
+
+        //hash the block with its fields
+        let mut hasher = Sha256::new();
+        hasher.update(timestamp.to_be_bytes());
+        hasher.update(&prev_hash);
+        hasher.update(&merkle_root);
+        hasher.update(&length.to_be_bytes());
+        hasher.update(&digest_id.to_be_bytes());
+        let hash: HashValue = hasher.finalize().into();
+
+        Self {
+            hash,
+            timestamp,
+            prev_hash,
+            merkle_root,
+            length,
+            digest_id,
+        }
+    }
+    pub fn create(args: DigestBlockArgs ) -> Self {
+        Self::private_new(
+            args.prev_hash,
+            args.merkle_root,
+            args.length,
+            args.digest_id,
+        )
+    }
+}
+
+
+
 impl Block for DigestBlock {
+    type Args = DigestBlockArgs;
+    #[inline]
     fn prev_hash(&self) -> HashValue {
         self.prev_hash
     }
+    #[inline]
     fn hash(&self) -> HashValue {
         self.hash
     }
+
+    ///NOTE: return the digest id as the index of this block in it's chain
+    ///     self.digest_id == self.index
+    #[inline]
     fn digest_id(&self) -> usize {
         self.digest_id as usize
     }
-    ///return the digest id as the index of this block in it's chain
+    ///NOTE: return the digest id as the index of this block in it's chain
+    ///     self.digest_id == self.index
+    #[inline]
     fn index(&self) -> usize {
         self.digest_id as usize
+    }
+
+    #[inline]
+    fn create(args: Self::Args ) -> Self {
+        Self::private_new(
+            args.prev_hash,
+            args.merkle_root,
+            args.length,
+            args.digest_id,
+        )
     }
 }
 
