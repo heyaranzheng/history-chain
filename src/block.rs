@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use crate::chain::BlockChain;
 use crate::hash::{Hasher, HashValue};
 use crate::herrors::HError;
+use crate::constants::ZERO_HASH;
 
 
 pub trait Block 
@@ -20,10 +21,14 @@ pub trait Block
     ///the index of this block in it's chain, if this is a digest block, 
     ///it's the same as the digest id.
     fn index(&self) -> usize;
+    ///crate a header block for a new chain.
+    fn genesis(digest_id: u32) -> Self;
 }
 
 ///have an ability to generate a merkle root by a given chain, store it in 
-///itself if we can, and return it.
+///itself if we can, and return it. The function used to create a new header for
+///a chain is `genesis`, and it is different for different types of chains because
+///of the differences in args list.
 pub trait Digester: Block {
     ///digester has a method to digest a chain.
     ///This is the method to caculate the merkle root of a given chain. 
@@ -32,6 +37,8 @@ pub trait Digester: Block {
 
 ///have an ability to store data's hash value in it's own block, and return it's hash value.
 ///have an ability to store data's uuid, which is a unique identifier of the data in some system.
+///The function used to create a new header for a chain is `genesis`, and it is different for 
+/// different types of chains because of the differences in args list.
 pub trait Carrier : Block {
     ///have an hash of data
     fn data_hash(&self) -> HashValue;
@@ -173,6 +180,17 @@ impl Block for DataBlock {
             args.index,
         )  
     }
+    fn genesis(digest_id: u32) -> Self {
+        let args = DataBlockArgs::new(
+            ZERO_HASH, 
+            ZERO_HASH, 
+            ZERO_HASH, 
+                    digest_id, 
+        0);
+        Self::create(args)
+    }
+
+    
 }
 
 impl Carrier for DataBlock {
@@ -188,6 +206,7 @@ impl Carrier for DataBlock {
     fn digest_id(&self) -> usize {
         self.digest_id as usize
     }
+    
 }
 
 
@@ -258,8 +277,8 @@ impl Block for DigestBlock {
     fn hash(&self) -> HashValue {
         self.hash
     }
-    ///digestblock's index is equal to the digest id of datablock 
-    ///which has been disgested by it.
+    ///digestblock's index is equal to the datablock's digest_id,
+    ///which has been disgested by this block.
     #[inline]
     fn index(&self) -> usize {
         self.digest_id as usize
@@ -274,6 +293,15 @@ impl Block for DigestBlock {
             args.digest_id,
         )
     }
+    fn genesis(digest_id: u32) -> Self {
+        let args = DigestBlockArgs::new(
+            ZERO_HASH,
+            ZERO_HASH,
+            1,
+            digest_id,
+        );
+        Self::create(args)
+    }
 }
 
 
@@ -284,5 +312,6 @@ impl Digester for DigestBlock {
         self.merkle_root = merkle_root;
         Ok(merkle_root)
     }
+    
 }
 

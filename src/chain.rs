@@ -122,10 +122,23 @@ pub struct BlockChain<B>
 impl <B> BlockChain<B>
     where B: Block
 {
-    pub fn new() -> Self {
+    ///return a chain with NO block.
+    #[inline]
+    pub fn new_empty() -> Self {
         Self {
             blocks: Vec::<B>::new()
         }
+    }
+    
+
+    pub fn new(digest_id: u32) -> Self {
+        let  block = B::genesis(digest_id);
+        let mut chain = Self {
+            blocks: Vec::<B>::new()
+        };
+        chain.blocks.push(block);
+        chain
+
     }
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -401,10 +414,10 @@ impl <'a, B> ChainRef<'a, B>
 
     ///COPY the data this ChainRef points to, and return a new BlockChain, 
     ///not a reference of pointer.
-    pub fn copy(&self) -> BlockChain<B>
+    pub fn copy_data(&self) -> BlockChain<B>
         where B: Clone + Block
     {
-        let mut chain = BlockChain::<B>::new();
+        let mut chain = BlockChain::<B>::new_empty();
         chain.blocks.extend_from_slice(self.as_slice());
         chain
     }

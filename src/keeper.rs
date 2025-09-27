@@ -36,7 +36,7 @@ impl <B, D> ChainKeeper<B, D>
 {
     pub fn new() -> Self {
         Self {
-            main: RwLock::new(BlockChain::<D>::new()),
+            main: RwLock::new(BlockChain::<D>::new_empty()),
             sides: RwLock::new(Vec::<BlockChain<B>>::new()),
         }
     }

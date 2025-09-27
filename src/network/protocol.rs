@@ -310,6 +310,19 @@ impl Block for VoteBlock {
             args.index,
         )
     }
+    fn genesis(index: u32) -> Self {
+        let args = VoteBlockArgs {
+            prev_hash: ZERO_HASH,
+            expire_time: 0,
+            block_hash: ZERO_HASH,
+            voter: ZERO_HASH,
+            vote: false,
+            suspected_block: ZERO_HASH,
+            result: 0.0,
+            index: index as usize,
+        };
+        Self::create(args)
+    }
 }
 
 
