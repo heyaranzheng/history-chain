@@ -19,8 +19,8 @@ pub trait Chain
     ///chain has an exactly length 
     fn len(&self) -> usize;
 
-
-    ///have an ablility to verify the chain. This is a default implementation.
+    ///This is a default implementation.
+    ///have an ablility to verify the chain. 
     ///verify the chain by hash and index order.
     fn verify(&self) -> Result<(), HError> {
         let len = self.len();
@@ -130,7 +130,10 @@ impl <B> BlockChain<B>
         }
     }
     
-
+    ///return a chain with a genesis block(a header block).
+    ///the genesis block's all feilds are set by 0 except block's hash value, timestamp.
+    ///More precisely, the block's "pre_hash" value is setted with zero like [0u8; 32], 
+    ///other fields just set to 0.
     pub fn new(digest_id: u32) -> Self {
         let  block = B::genesis(digest_id);
         let mut chain = Self {
@@ -140,6 +143,25 @@ impl <B> BlockChain<B>
         chain
 
     }
+
+    ///add a block into this chain. It will check if the chain is empty and the valiadty of
+    /// the block we will add.
+    pub fn add(&mut self, block: B) -> Result<(), HError> {
+        //check if this chain is empty
+        if self.blocks.len() == 0 {
+            return Err(HError::Chain { message: format!("empty chain") });
+        }
+
+        //verify the block's hash
+        let pre_hash = self.blocks.last().unwrap().hash();
+        block.verify(pre_hash)?;
+
+        //add the block to this chain
+        self.blocks.push(block);
+        Ok(())
+    }
+
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             blocks: Vec::<B>::with_capacity(capacity)

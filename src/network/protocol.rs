@@ -255,19 +255,8 @@ impl VoteBlock {
     ) -> Self {
         let timestamp = chrono::Utc::now().timestamp() as u64;
 
-        //hash the block.
-        let mut hasher = Sha256::new();
-        hasher.update(prev_hash);
-        hasher.update(timestamp.to_be_bytes());
-        hasher.update(expire_time.to_be_bytes());
-        hasher.update(block_hash);
-        hasher.update(voter);
-        hasher.update(vote.to_string().as_bytes());
-        hasher.update(suspected_block);
-        hasher.update(result.to_be_bytes());
-        hasher.update(index.to_be_bytes());
-        let hash:HashValue = hasher.finalize().into();
-        Self {
+        let hash = ZERO_HASH;
+        let mut  block = Self {
             hash,
             prev_hash,
             expire_time,
@@ -278,7 +267,24 @@ impl VoteBlock {
             suspected_block,
             result,
             index,
-        }
+        };
+        let  hash = block.hash_block();
+        block.hash = hash;
+        block
+    
+    }
+
+    pub fn new(args: VoteBlockArgs) -> Self {
+        Self::private_new(
+            args.prev_hash,
+            args.expire_time,
+            args.block_hash,
+            args.voter,
+            args.vote,
+            args.suspected_block,
+            args.result,
+            args.index,
+        )
     }
 }
 
@@ -298,6 +304,7 @@ impl Block for VoteBlock {
     fn index(&self) -> usize {
         self.index
     }
+    ///create a new block with the given args.
     fn create(args: Self::Args ) -> Self {
         Self::private_new(
             args.prev_hash,
@@ -310,6 +317,7 @@ impl Block for VoteBlock {
             args.index,
         )
     }
+    ///give a index of the block, return a genesis block.
     fn genesis(index: u32) -> Self {
         let args = VoteBlockArgs {
             prev_hash: ZERO_HASH,
@@ -322,6 +330,35 @@ impl Block for VoteBlock {
             index: index as usize,
         };
         Self::create(args)
+    }
+
+    ///compute the hash of the block with its fields ignoring the "hash" field.
+    fn hash_block(&self) -> HashValue {
+        let mut hasher = Sha256::new();
+        hasher.update(self.prev_hash);
+        hasher.update(self.timestamp.to_be_bytes());
+        hasher.update(self.expire_time.to_be_bytes());
+        hasher.update(self.block_hash);
+        hasher.update(self.voter);
+        hasher.update(self.vote.to_string().as_bytes());
+        hasher.update(self.suspected_block);
+        hasher.update(self.result.to_be_bytes());
+        hasher.update(self.index.to_be_bytes());
+        let hash:HashValue = hasher.finalize().into();
+        hash
+    }
+
+    ///verify the block's filed by block's hash.
+    fn hash_verify(&self) -> Result<(), HError> {
+        let hash = self.hash_block();
+        if self.hash!= hash {
+            return Err(HError::Block {
+                message:
+                    format!("block hash is not equal to the hash of its fields,
+                        block hash: {:?}, hash of its fields: {:?}", self.hash, hash),
+            });
+        }
+        Ok(())
     }
 }
 

@@ -23,6 +23,25 @@ pub trait Block
     fn index(&self) -> usize;
     ///crate a header block for a new chain.
     fn genesis(digest_id: u32) -> Self;
+    ///have an ability to computer the block's hash value by its fields ignoring "hash" field.
+    fn hash_block(&self) -> HashValue;
+    ///verify the block's hash value by its fields ignoring "hash" field.
+    fn hash_verify(&self) -> Result<(), HError>;
+
+    /// This is a DEFAULT IMPLEMENTATION of verify method.
+    /// using "hash_verify" and "prev_hash" methods.
+    /// verify the block's hash and prev_hash.
+    fn verify(&self, pre_hash: HashValue) -> Result<(), HError>{
+        self.hash_verify()?;
+        if self.prev_hash() != pre_hash {
+            return Err(
+                HError::Block { 
+                    message: format!("prev_hash is not correct, block is invalid in this chain")
+                }
+            );
+        }
+        Ok(())
+    }
 }
 
 ///have an ability to generate a merkle root by a given chain, store it in 
@@ -130,17 +149,8 @@ impl DataBlock {
     {
         let timestamp = Utc::now().timestamp() as u64;
 
-        //hash the block with its fields
-        let mut hasher = Sha256::new();
-        hasher.update(timestamp.to_be_bytes());
-        hasher.update(&prev_hash);
-        hasher.update(&data_hash);
-        hasher.update(&data_uuid);
-        hasher.update(&digest_id.to_be_bytes());
-        hasher.update(&index.to_be_bytes());
-        let hash: HashValue = hasher.finalize().into();
-
-        Self {
+        let hash = ZERO_HASH;
+        let mut block = Self {
             hash,
             timestamp,
             prev_hash,
@@ -148,7 +158,10 @@ impl DataBlock {
             data_uuid,
             digest_id,
             index,
-        }
+        };
+        let hash = block.hash_block();
+        block.hash = hash;  
+        block
     }
 
 
@@ -180,6 +193,7 @@ impl Block for DataBlock {
             args.index,
         )  
     }
+    ///the parameter "digest_id" we need is the index of the degist block which will disgest this one.
     fn genesis(digest_id: u32) -> Self {
         let args = DataBlockArgs::new(
             ZERO_HASH, 
@@ -190,6 +204,29 @@ impl Block for DataBlock {
         Self::create(args)
     }
 
+    fn hash_block(&self) -> HashValue {
+        let mut hasher = Sha256::new();
+        hasher.update(self.timestamp.to_be_bytes());
+        hasher.update(&self.prev_hash);
+        hasher.update(&self.data_hash);
+        hasher.update(&self.data_uuid);
+        hasher.update(&self.digest_id.to_be_bytes());
+        hasher.update(&self.index.to_be_bytes());
+        let hash: HashValue = hasher.finalize().into();
+        hash
+    }
+    
+    fn hash_verify(&self) -> Result<(), HError> {
+        let hash = self.hash_block();
+        if self.hash != hash {
+            return Err(HError::Block {
+                message: 
+                    format!("block hash is not equal to the hash of its fields, 
+                        block hash: {:?}, hash of its fields: {:?}", self.hash, hash),
+            });
+        }
+        Ok(())
+    }
     
 }
 
@@ -237,24 +274,20 @@ impl DigestBlock {
     {
         let timestamp = Utc::now().timestamp() as u64;
 
-        //hash the block with its fields
-        let mut hasher = Sha256::new();
-        hasher.update(timestamp.to_be_bytes());
-        hasher.update(&prev_hash);
-        hasher.update(&merkle_root);
-        hasher.update(&length.to_be_bytes());
-        hasher.update(&digest_id.to_be_bytes());
-        let hash: HashValue = hasher.finalize().into();
-
-        Self {
+        let hash = ZERO_HASH;
+        let mut block = Self {
             hash,
             timestamp,
             prev_hash,
             merkle_root,
             length,
             digest_id,
-        }
+        };
+        let hash = block.hash_block();
+        block.hash = hash;
+        block
     }
+
     pub fn create(args: DigestBlockArgs ) -> Self {
         Self::private_new(
             args.prev_hash,
@@ -301,6 +334,28 @@ impl Block for DigestBlock {
             digest_id,
         );
         Self::create(args)
+    }
+    fn hash_block(&self) -> HashValue {
+        let mut hasher = Sha256::new();
+        hasher.update(self.timestamp.to_be_bytes());
+        hasher.update(&self.prev_hash);
+        hasher.update(&self.merkle_root);
+        hasher.update(&self.length.to_be_bytes());
+        hasher.update(&self.digest_id.to_be_bytes());
+        let hash: HashValue = hasher.finalize().into();
+        hash
+    }
+
+    fn hash_verify(&self) -> Result<(), HError> {
+        let hash = self.hash_block();
+        if self.hash != hash {
+            return Err(HError::Block {
+                message: 
+                    format!("block hash is not equal to the hash of its fields, 
+                        block hash: {:?}, hash of its fields: {:?}", self.hash, hash),
+            });
+        }
+        Ok(())
     }
 }
 
