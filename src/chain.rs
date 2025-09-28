@@ -5,17 +5,24 @@ use std::iter::Iterator;
 use bincode::{Decode, Encode};
 
 use crate::block::{Block, Carrier};
+use crate::constants::ZERO_HASH;
 use crate::hash::HashValue;
 use crate::herrors::HError;
 
 
 
-
+///Chain can be fixed or dynamic size, and it can be mutable or immutable.
+///So the mutable method like add, push, pop  is not necessary for this trait, 
+///We just use references to the chain or a block as the input or output.
+///If you want a mutable method for the chain, you can implement it for yourself.
 pub trait Chain  
 {
     type Block: Block;
     ///blocks in the object should have some kind of linear relationship.
-    fn block_ref(&self, index: usize) -> Option<& Self::Block>;
+    ///Index is a unique identifier or a location for each block in a completed chain. 
+    /// If we chose a slice of a completed chain as a new chain, the index of block in
+    /// this new chain may not be equal to its local index.
+    fn block_ref(&self, local_index: usize) -> Option<& Self::Block>;
     ///chain has an exactly length 
     fn len(&self) -> usize;
 
@@ -53,7 +60,25 @@ pub trait Chain
         Ok(())
     }
 
-    ///get a block by index. This is a default implementation.
+    ///This is a default implementation.
+    ///return a reference to a block by its index in a completed chain, NOT a 
+    ///local index in this chain.   
+    fn block_ref_by_index(&self, index: usize) -> Option<& Self::Block>{
+        //get the index range of this chain.
+        let min_index = self.block_ref(0).unwrap().index();
+        let len = self.len();
+        let max_index = self.block_ref(len -1 ).unwrap().index();
+
+        //check if the given index is valid.
+        if index >= min_index && index <= max_index {
+            let offset = index - min_index;
+            return Some(&self.block_ref(offset).unwrap());
+        }
+        None
+    }
+
+    ///This is a default implementation.
+    ///get a block by index. 
     #[inline]
     fn get_block_by_index(&self, index: usize) -> Option<Self::Block>
         where Self::Block: Clone
@@ -130,7 +155,7 @@ impl <B> BlockChain<B>
         }
     }
     
-    ///return a chain with a genesis block(a header block).
+    ///return a chain WITH a genesis block(a header block). The length of the chain is 1.
     ///the genesis block's all feilds are set by 0 except block's hash value, timestamp.
     ///More precisely, the block's "pre_hash" value is setted with zero like [0u8; 32], 
     ///other fields just set to 0.
@@ -149,7 +174,14 @@ impl <B> BlockChain<B>
     pub fn add(&mut self, block: B) -> Result<(), HError> {
         //check if this chain is empty
         if self.blocks.len() == 0 {
-            return Err(HError::Chain { message: format!("empty chain") });
+            //check if the block is genesis block
+            if block.prev_hash() != ZERO_HASH {
+                return Err(HError::Chain { message: format!("empty chain") });
+            }
+
+            //add the genesis block to this chain
+            self.blocks.push(block);
+            return Ok(());
         }
 
         //verify the block's hash
@@ -162,7 +194,9 @@ impl <B> BlockChain<B>
     }
 
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    ///create a chain WITHOUT genesis block, 
+    ///the capacity of the blocks is setted to the given value.
+    pub fn empty_with_capacity(capacity: usize) -> Self {
         Self {
             blocks: Vec::<B>::with_capacity(capacity)
         }
@@ -203,16 +237,15 @@ impl <B> Chain for BlockChain<B>
     where B: Block
 {
     type Block = B;
-    
-    fn block_ref(&self, index: usize) -> Option<& Self::Block> 
+    ///return a reference to a block by its local index in this chain.
+    ///NOT the index in the completed chain.
+    ///Note: chain.blocks[local_index].index() may not equal to local_index.
+    #[inline]
+    fn block_ref(&self, local_index: usize) -> Option<& Self::Block> 
     {
-        let min_index = self.blocks[0].index();
-        let len = self.blocks.len();
-        let max_index = self.blocks[len -1 ].index();
-
-        if index >= min_index && index <= max_index {
-            let offset = index - min_index;
-            return Some(&self.blocks[offset]);
+        //check if the given index is valid
+        if local_index < self.blocks.len() {
+            return Some(&self.blocks[local_index]);
         }
 
         None

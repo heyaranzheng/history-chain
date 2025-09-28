@@ -187,6 +187,7 @@ pub struct VoteBlockArgs {
     pub suspected_block: HashValue,
     pub result: f32,
     pub index: usize,
+    pub digest_id: u32,
 }
 
 impl VoteBlockArgs {
@@ -199,6 +200,7 @@ impl VoteBlockArgs {
         suspected_block: HashValue,
         result: f32,
         index: usize,
+        digest_id: u32,
     ) -> Self {
         Self {
             prev_hash,
@@ -209,6 +211,7 @@ impl VoteBlockArgs {
             suspected_block,
             result,
             index,
+            digest_id,
         }
     }
 }
@@ -241,6 +244,8 @@ pub struct VoteBlock {
     result: f32,
     ///the index of the block in the chain
     index: usize,
+    ///the chain's id, the digest block's id.
+    digest_id: u32,
 }
 impl VoteBlock {
     fn private_new(
@@ -252,6 +257,7 @@ impl VoteBlock {
         suspected_block: HashValue,
         result: f32,
         index: usize,
+        digest_id: u32,
     ) -> Self {
         let timestamp = chrono::Utc::now().timestamp() as u64;
 
@@ -267,6 +273,7 @@ impl VoteBlock {
             suspected_block,
             result,
             index,
+            digest_id
         };
         let  hash = block.hash_block();
         block.hash = hash;
@@ -284,6 +291,7 @@ impl VoteBlock {
             args.suspected_block,
             args.result,
             args.index,
+            args.digest_id,
         )
     }
 }
@@ -315,10 +323,11 @@ impl Block for VoteBlock {
             args.suspected_block,
             args.result,
             args.index,
+            args.digest_id,
         )
     }
     ///give a index of the block, return a genesis block.
-    fn genesis(index: u32) -> Self {
+    fn genesis(digest_id: u32) -> Self {
         let args = VoteBlockArgs {
             prev_hash: ZERO_HASH,
             expire_time: 0,
@@ -327,7 +336,8 @@ impl Block for VoteBlock {
             vote: false,
             suspected_block: ZERO_HASH,
             result: 0.0,
-            index: index as usize,
+            index: 0 as usize,
+            digest_id ,
         };
         Self::create(args)
     }
@@ -344,6 +354,7 @@ impl Block for VoteBlock {
         hasher.update(self.suspected_block);
         hasher.update(self.result.to_be_bytes());
         hasher.update(self.index.to_be_bytes());
+        hasher.update(self.digest_id.to_be_bytes());
         let hash:HashValue = hasher.finalize().into();
         hash
     }
@@ -360,6 +371,16 @@ impl Block for VoteBlock {
         }
         Ok(())
     }
+    
+    ///return the index of the digest block which  disgest it.
+    ///Index of the WHOLE chain it blongs to. 
+    ///Although this is a digest block, it also can have another digest block to digest the 
+    ///chain which owns it.
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
+    }
+
 }
 
 

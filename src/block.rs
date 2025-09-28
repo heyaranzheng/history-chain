@@ -21,12 +21,16 @@ pub trait Block
     ///the index of this block in it's chain, if this is a digest block, 
     ///it's the same as the digest id.
     fn index(&self) -> usize;
-    ///crate a header block for a new chain.
+    ///create a header block for a new chain. 
     fn genesis(digest_id: u32) -> Self;
     ///have an ability to computer the block's hash value by its fields ignoring "hash" field.
     fn hash_block(&self) -> HashValue;
     ///verify the block's hash value by its fields ignoring "hash" field.
     fn hash_verify(&self) -> Result<(), HError>;
+    ///digest id or chain's id. Namely, the id of the chain which this block belongs to. 
+    ///The digester blocks also can have another digester block to digest the chain which 
+    ///was consisted of by digest blocks. 
+    fn digest_id(&self) -> usize;
 
     /// This is a DEFAULT IMPLEMENTATION of verify method.
     /// using "hash_verify" and "prev_hash" methods.
@@ -63,8 +67,6 @@ pub trait Carrier : Block {
     fn data_hash(&self) -> HashValue;
     ///have an uuid of data
     fn data_uuid(&self) -> HashValue;
-    ///digest id or chain's id
-    fn digest_id(&self) -> usize;
 }
 
 ///This is a marker trait for struct which can be used as args to create a new block.
@@ -227,6 +229,13 @@ impl Block for DataBlock {
         }
         Ok(())
     }
+
+    ///return the index of the digest block which  disgest it.
+    ///Index of the WHOLE chain it blongs to. 
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
+    }
     
 }
 
@@ -239,11 +248,6 @@ impl Carrier for DataBlock {
     fn data_uuid(&self) -> HashValue {
         self.data_uuid
     }
-    #[inline]
-    fn digest_id(&self) -> usize {
-        self.digest_id as usize
-    }
-    
 }
 
 
@@ -356,6 +360,13 @@ impl Block for DigestBlock {
             });
         }
         Ok(())
+    }
+
+    ///return the index of the digest block which  disgest it.
+    ///Index of the WHOLE chain it blongs to. 
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
     }
 }
 
