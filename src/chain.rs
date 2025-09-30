@@ -132,7 +132,6 @@ pub trait Chain
         }
         None
     }
-
  
 }
 
@@ -218,6 +217,21 @@ impl <B> BlockChain<B>
         ChainRef::from_chain_by_hash(self, hash_range)
     }
 
+     ///give a ChainInfo object to find target segment from this chain.
+    pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
+        let mut chain_ref: ChainRef<'_, B>;
+        if let  Some((start , end)) = request.index {
+            chain_ref = self.index_select((start as usize, end as usize))?;
+        };
+        if let Some(hash) = request.hash {
+            chain_ref = self.hash_select((hash, hash))?;
+        }
+
+        Ok(chain_ref)
+
+    }
+
+
 
     ///iterate the blocks in the chain.
     pub fn iter(&self) -> std::slice::Iter<B> {
@@ -231,6 +245,7 @@ impl <B> BlockChain<B>
     }
 
 
+  
 }
 
 impl <B> Chain for BlockChain<B>
@@ -325,15 +340,19 @@ impl <'a, B> ChainRef<'a, B>
     }
 
     ///return a reference to the whole chain.
-    pub fn from_chain(chain: &'a BlockChain<B>) -> Self
+    ///This function will verify the chain first.
+    pub fn from_chain(chain: &'a BlockChain<B>) -> Result<Self, HError>
         where B: Block
     {
+        //check if the given chain is valid 
+        chain.verify()?;
         let len = chain.blocks.len();
-        Self {
+        Ok(
+            Self {
             data: chain.blocks.as_ptr(),
             len,
             _marker: PhantomData
-        }
+        })
     }
     
 
@@ -477,7 +496,11 @@ impl <'a, B> ChainRef<'a, B>
         chain
     }
 
+
+
 }
+
+unsafe impl <B:Block> Send for ChainRef<'_, B> {}
 
 ///Clone the ChainRef itself, not the data it points to.
 ///Use function "copy" to get a new BlockChain with the data this ChainRef points to.
@@ -494,8 +517,29 @@ impl <'a, B> Clone for ChainRef<'a, B>
 }
 
 
-//this is used to store the information of a chain for searching.
-pub struct ChainInfo {
+///this is used to store the information of a chain for searching or describing.
+///Use a builder to create a ChainInfo. For example:
+///let chain_info = ChainInfoBuilder::new()
+///   .digest_id(1)
+///   .index(1, 10)
+///   .timestamp(100, 200)
+///   .build<B>();
+pub struct ChainInfo <B>
+    where B: Block
+{
+    pub digest_id: Option<u32>,
+    pub index: Option<(u32, u32)>,
+    pub timestamp: Option<(u64, u64)>,
+    pub hash: Option<HashValue>,
+    pub merkle_root: Option<HashValue>,
+    pub data_uuid: Option<HashValue>,
+    pub data_hash: Option<HashValue>,
+    _marker: PhantomData<B>,
+}
+
+
+///this is a builder for ChainInfo.
+pub struct ChainInfoBuilder {
     pub digest_id: Option<u32>,
     pub index: Option<(u32, u32)>,
     pub timestamp: Option<(u64, u64)>,
@@ -506,10 +550,8 @@ pub struct ChainInfo {
 }
 
 
-unsafe impl <B:Block> Send for ChainRef<'_, B> {}
-
-
-impl <'a> ChainInfo {
+impl  ChainInfoBuilder 
+{
     pub fn new() -> Self {
         Self {
             digest_id: None,
@@ -521,5 +563,72 @@ impl <'a> ChainInfo {
             data_hash: None,
         }
     }
+
+    pub fn build<B>(self) -> ChainInfo<B>
+        where B: Block
+    {
+        ChainInfo {
+            digest_id: self.digest_id,
+            index: self.index,
+            timestamp: self.timestamp,
+            hash: self.hash,
+            merkle_root: self.merkle_root,
+            data_uuid: self.data_uuid,
+            data_hash: self.data_hash,
+            _marker: PhantomData,
+        }
+    }
+    
+    ///digest_id of the chain. digest_id is the digest block's id in its digest chain.
+    ///So if chains' digest block generated a new chain, the digest_id can be used as an identifier 
+    /// number in this situation.
+    pub fn digest_id(mut self, digest_id: u32) -> Self {
+        self.digest_id = Some(digest_id);
+        self
+    }
+
+    ///index range of the chain.
+    ///block's index is the ordering number of the block in whole chain. If we chose a segment of the
+    ///chain, the index does not change.
+    pub fn index(mut self, start: u32, end: u32) -> Self {
+        self.index = Some((start, end));
+        self
+    }
+
+    ///the timestamp range of the chain.
+    pub fn timestamp(mut self, start: u64, end: u64) -> Self {
+        self.timestamp = Some((start, end));
+        self
+    }
+
+    ///hash of the chain.
+    pub fn hash(mut self, hash: HashValue) -> Self {
+        self.hash = Some(hash);
+        self
+    }
+
+    ///merkle_root of the chain. only digest block has merkle_root.
+    pub fn merkle_root(mut self, merkle_root: HashValue) -> Self {
+        self.merkle_root = Some(merkle_root);
+        self
+    }
+
+    ///data_uuid of the chain. only data block has data_uuid.
+    pub fn data_uuid(mut self, data_uuid: HashValue) -> Self {
+        self.data_uuid = Some(data_uuid);
+        self
+    }
+
+    ///data_hash of the chain. only data block has data_hash.
+    pub fn data_hash(mut self, data_hash: HashValue) -> Self {
+        self.data_hash = Some(data_hash);
+        self
+    }
 }
 
+impl  Default for ChainInfoBuilder
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
