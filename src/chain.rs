@@ -219,7 +219,7 @@ impl <B> BlockChain<B>
 
      ///give a ChainInfo object to find target segment from this chain.
     pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
-        let mut chain_ref: ChainRef<'_, B>;
+        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(std::ptr::null(), 0);
         if let  Some((start , end)) = request.index {
             chain_ref = self.index_select((start as usize, end as usize))?;
         };
@@ -292,6 +292,15 @@ impl <'a, B> ChainRef<'a, B>
             len,
             _marker: PhantomData
         }
+    }
+
+    ///return a block object's reference
+    fn block_ref(&self, local_index: usize) -> Option<&B> {
+        if local_index < self.len {
+            return Some(unsafe { &*self.data.add(local_index) });
+        }
+
+        None
     }
 
 
@@ -410,7 +419,8 @@ impl <'a, B> ChainRef<'a, B>
 
 
     ///check if the ChainRef contains a block with the given hash.
-    pub fn contain_hash(&self, hash: HashValue) -> Option<B>
+    ///return the LOCAL INDEX of the block in current chain.
+    pub fn contain_hash(&self, hash: HashValue) -> Option<usize>
         where B: Clone + Block
     {
         let len = self.len;
@@ -419,15 +429,30 @@ impl <'a, B> ChainRef<'a, B>
                 &*self.data.add(i)
             };
             if block.hash() == hash {
-                return Some(block.clone());
+                return Some(i);
             }
         }
         None
     }   
+    ///select by hash in ChainRef, return the LOCAL INDEX of the block in current chain.
+    fn hash_select(&self, hash: HashValue) -> Option<B> 
+        where B: Clone + Block
+    {
+        let len = self.len;
+        for  i in 0..len {
+            let block_ref = self.block_ref(i).unwrap();
+            if block_ref.hash() == hash {
+                return Some(block_ref.clone());
+            }
+        }
+
+        None
+    }
     
     ///check if the ChainRef contains a block with the given data_hash.
-    pub fn contain_data_hash(&self, data_hash: HashValue) -> Option<B>
-        where B: Clone + Block + Carrier
+    ///return the LOCAL INDEX of the block in current chain.
+    pub fn contain_data_hash(&self, data_hash: HashValue) -> Option<usize>
+        where B: Block + Carrier
     {
         let len = self.len;
         for  i in 0..len {
@@ -435,15 +460,16 @@ impl <'a, B> ChainRef<'a, B>
                 &*self.data.add(i)
             };
             if block.data_hash() == data_hash {
-                return Some(block.clone());
+                return Some(i);
             }
         }
         None
     }
 
     ///check if the ChainRef contains a block with the given data_uuid.
-    pub fn contain_uuid(&self, uuid: HashValue) -> Option<B>
-        where B: Clone + Block + Carrier
+    ///return the LOCAL INDEX of the block in current chain.
+    pub fn contain_uuid(&self, uuid: HashValue) -> Option<usize>
+        where B:  Block + Carrier
     {
         let len = self.len;
         for  i in 0..len {
@@ -451,14 +477,15 @@ impl <'a, B> ChainRef<'a, B>
                 &*self.data.add(i)
             };
             if block.data_uuid() == uuid {
-                return Some(block.clone());
+                return Some(i);
             }
         }
         None
     }
 
     ///check if the ChainRef contains a block with the given index.
-    pub fn contain_index(&self, index: usize) -> Option<B>
+    ///return the LOCAL INDEX of the block in current chain.
+    pub fn contain_index(&self, index: usize) -> Option<usize>
         where B: Clone + Block
     {
         let len = self.len;
@@ -467,7 +494,7 @@ impl <'a, B> ChainRef<'a, B>
                 &*self.data.add(i)
             };
             if block.index() == index {
-                return Some(block.clone());
+                return Some(i);
             }
         }
         None
@@ -484,6 +511,21 @@ impl <'a, B> ChainRef<'a, B>
         unsafe {
             std::slice::from_raw_parts(self.data, self.len)
         }
+    }
+
+    pub fn from_slice(slice: &[B]) -> Self {
+        Self {
+            data: slice.as_ptr(),
+            len: slice.len(),
+            _marker: PhantomData
+        }
+    }
+
+    #[inline]
+    pub fn into_vec(self) -> Vec<B> 
+        where B: Clone + Block
+    {
+        self.as_slice().to_vec()
     }
 
     ///COPY the data this ChainRef points to, and return a new BlockChain, 
