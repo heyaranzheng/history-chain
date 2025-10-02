@@ -1,7 +1,7 @@
 use tokio::sync::Mutex;
 use std::sync::Arc;
 
-use crate::block::{ Block, Digester, BlockArgs };
+use crate::block::{ Block, BlockArgs, Carrier, Digester };
 use crate::hash::HashValue;
 use crate::chain::{Chain, BlockChain, ChainInfo};
 use crate::herrors::HError;
@@ -11,7 +11,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait Manager {
-    type DataBlock: Block ;
+    type DataBlock: Block + Carrier;
     type DigestBlock: Block + Digester;
     async fn archive(&mut self, keeper: &mut ChainKeeper<Self::DataBlock, Self::DigestBlock>) 
         -> Result<(), HError>;
@@ -25,9 +25,8 @@ pub trait Manager {
 
 }
 
-
 pub struct ChainManager < B, D> 
-    where B: Block,
+    where B: Block + Carrier,
           D: Block + Digester,
 
 {
