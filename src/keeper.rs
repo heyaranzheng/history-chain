@@ -55,15 +55,29 @@ pub struct Sides <B>
 impl <B> Sides<B>
     where B: Block 
 {
-    ///this method will create a new side chain with a genesis block.
-    ///The digest_id should be set from 1 not 0.
-    pub fn new(digest_id: u32) -> Self {
-        let chain = BlockChain::new(digest_id);
-        let chains = vec![chain];
-        let  sides = Self {
-            sides: Arc::new(RwLock::new(chains)),
-        };
-        sides  
+    ///create a new empty side chains.
+    pub fn new_empty() -> Self {
+        Self {
+            sides: Arc::new(RwLock::new(Vec::<BlockChain<B>>::new()))
+        }
+    }
+
+    ///add a new block to the last side chain.
+    async fn  add_block(&self, block: B) -> Result<usize, HError> {
+        //check the block first
+        let sides = self.sides.read().await;
+        let chain = &sides[sides.len() - 1];
+        let pre_hash = chain.block_ref(chain.len() - 1).unwrap().hash();
+        block.verify(pre_hash)?;
+        drop(sides);
+
+        //add the block to the last side chain.
+        let mut sides = self.sides.write().await;
+        let sides_len = sides.len();
+        let chain = &mut sides[sides_len - 1];
+        let  index = block.index();
+        chain.add(block)?;
+        Ok(index)
     }
 }
 
@@ -94,17 +108,18 @@ pub trait Keeper {
     type DigestBlock: Block + Digester;
     type DataBlock: Block;
 
-    ///add a new block to the chain.
-    ///return the index of the new block in the whole chain, it's equal to the local index
-    ///of the block in the current chain.
-    async fn add_block(&self, block: Self::DataBlock) -> Result<usize, HError>;
-    ///add a new block chain to the side chains, keeper will creat a new block in the main chain 
-    ///to digest the previous side chain.
-    async fn add_chain(&self, chain: &BlockChain<Self::DataBlock>) -> Result<usize, HError>;
-    ///return the main chain within a arc read write lock.\
+    ///return the main chain within a arc read write lock.
     fn main_chain(&self) -> Main<Self::DigestBlock>;
     ///return the side chains within a arc read write lock.
     fn side_chains(&self) -> Sides<Self::DataBlock>;
+
+    /// DEFAULT IMPLEMENTATION:
+    ///return the main_chain's last block's index.
+    async fn main_index(&self) -> usize{
+        let chain = self.main_chain().read().await;
+        let len = chain.len();
+        chain.block_ref(len - 1).unwrap().index()
+    }
 }
 
 
@@ -121,13 +136,13 @@ impl <B, D> ChainKeeper<B, D>
     where D: Block + Digester,
           B: Block ,
 {
-    ///create a new chain keeper, with a main chain and a side chain which both have a genesis block.
-    ///The digest_id should be set from 1 not 0, because when the fist side chain will be digested by the 
-    ///block of index 1, not 0, in the main chain. So the main chain's fist block also should be 
-    /// set with 1 for the same reason.
+    ///create a new chain keeper, with an empty sides and a new main chain with a genesis block.
+    ///The digest_id of this genesis block should be set from 1 not 0, because if this chain (
+    /// the main chain in this keeper) is digested by another block, the block's index must be 
+    /// start from 1 in order to avoid the index of the genesis block is 0.
     pub  fn new() -> Self {
         let main = Main::new(1);
-        let sides = Sides::new(1);
+        let sides = Sides::new_empty();
         Self {
             main,
             sides,
@@ -145,12 +160,18 @@ unsafe impl <B, D> Send for ChainKeeper<B, D>
 impl <B, D> Keeper for ChainKeeper<B, D>
     where D: Block + Digester + Clone + Send + Sync,
           B: Block + Clone + Send + Sync,
-{
+{ 
     type DigestBlock = D;
     type DataBlock = B;
 
-    async fn add_block(&self, block: Self::DataBlock) -> Result<usize, HError> {
-        let mut sides = self.sides.
+    ///share the main chain within a arc read write lock.(just return a clone of  
+    ///  )
+    fn main_chain(&self) -> Main<D> {
+        self.main.clone()
+    }
+    
+    fn side_chains(&self) -> Sides<B> {
+        self.sides.clone()
     }
 
 }

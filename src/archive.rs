@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use sha2::Digest;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::fs::{OpenOptions, File};
 
-
+use crate::archive;
 use crate::hash::HashValue;
-use crate::constants::UuidBytes;
+use crate::constants::{UuidBytes, ZERO_HASH};
 use crate::herrors::HError;
 
 /// A struct that contains a hash value and a uuid for some data.
@@ -18,4 +21,35 @@ pub trait Archiver {
     ///hash the data.
     ///The Uuid and the hash are returned as a DataHash struct.
     async fn archive_mem(&self, data: &[u8]) -> Result<DataId, HError>;
+
+    async fn archive_file(&self, path: &str) -> Result<DataId, HError>{
+        //read the file into memory
+        let file_stream = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .await?;
+        let mut hasher = sha2::Sha256::new();
+
+        //create a buffer with 2MB size
+        let mut buffer = vec![0u8; 2 *1024 * 1024];
+        
+        
+        loop { 
+            let nread = file_stream.read(&mut buffer).await?;
+            if nread == 0 {
+                break;
+            }
+            hasher.update(&buffer[..nread]);
+        }
+
+        let hash = hasher.finalize();
+        let uuid = UuidBytes::new();
+        Ok(
+            DataId {
+                hash,
+                uuid,
+            }
+        )
+
+    }
 }

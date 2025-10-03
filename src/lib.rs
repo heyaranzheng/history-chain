@@ -1,7 +1,7 @@
 mod herrors;
 mod network;
 mod nodes;
-mod manager;
+mod executor;
 mod constants;
 mod chain;
 mod fpsc;
@@ -10,3 +10,4 @@ mod pipe;
 mod block;
 mod keeper;
 mod utils;
+mod archive;

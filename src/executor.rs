@@ -5,42 +5,49 @@ use crate::block::{ Block, BlockArgs, Carrier, Digester };
 use crate::hash::HashValue;
 use crate::chain::{Chain, BlockChain, ChainInfo};
 use crate::herrors::HError;
-use crate::keeper::ChainKeeper;
+use crate::keeper::{Keeper, Main, Sides, ChainKeeper};
+use crate::archive::Archiver;
 
 use async_trait::async_trait;
 
+///An executor is responsible for archiving data into some storage. 
+///All operations about chains and blocks should be done through an executor.
+///
 #[async_trait]
-pub trait Manager {
+pub trait Executor: Archiver {
     type DataBlock: Block + Carrier;
     type DigestBlock: Block + Digester;
-    async fn archive(&mut self, keeper: &mut ChainKeeper<Self::DataBlock, Self::DigestBlock>) 
-        -> Result<(), HError>;
+
+    ///create a new data block.
     async fn create_block<T>(&self, args: T) -> Result<Self::DataBlock, HError>
         where T: BlockArgs;
     ///in oreder to create a new block, we need to provide the previous block's hash
     ///and index in the whole chain.
     async fn hash_and_index(&self, chain: &BlockChain<Self::DataBlock>) -> 
         Result<(HashValue, usize), HError>;
+    ///store a chain in keeper and return the main chain's index(digest_id).
     async fn add_chain(&mut self) -> Result<usize, HError>;
 
 }
 
-pub struct ChainManager < B, D> 
+pub struct ChainExecutor < B, D> 
     where B: Block + Carrier,
           D: Block + Digester,
 
 {
     keeper: ChainKeeper<B, D>,
-    chain_buf: Arc<Mutex<BlockChain<B>>>,
+    chain_buf: Arc<Mutex<BlockChain<B>>>, 
 }
 
-impl < B, D> ChainManager<B, D> 
-    where B: Block + Clone,
-          D: Block + Digester + Clone,
+impl < B, D> ChainExecutor <B, D> 
+    where B: Block + Carrier,
+          D: Block + Digester ,
 {
-    pub fn new() -> Self {
-        Self {
-            keeper: ChainKeeper::new(),
-        }
+    pub  async fn new() -> Self<B, D> { 
+        let keeper = ChainKeeper::<B, D>::new();
+        let chain = BlockChain::<B>::new_empty();
+        let digest_id = keeper.
+        
+
     }
 }
