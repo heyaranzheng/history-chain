@@ -1,11 +1,12 @@
 use async_trait::async_trait;
 use sha2::Digest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::fs::{OpenOptions, File};
+use tokio::fs::{OpenOptions };
+use sha2::Sha256;
 
-use crate::archive;
+
 use crate::hash::HashValue;
-use crate::constants::{UuidBytes, ZERO_HASH};
+use crate::uuidbytes::{UuidBytes, Init };
 use crate::herrors::HError;
 
 /// A struct that contains a hash value and a uuid for some data.
@@ -20,11 +21,26 @@ pub trait Archiver {
     ///create an Uuid for some data as an identifier in some database system, then 
     ///hash the data.
     ///The Uuid and the hash are returned as a DataHash struct.
-    async fn archive_mem(&self, data: &[u8]) -> Result<DataId, HError>;
+    async fn archive_slice(&self, data: &[u8]) -> Result<DataId, HError>{
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let hash = hasher.finalize();
+        //
+        //TO DO:
+        //          save the data to the database system
+        //
+        let uuid = UuidBytes::new();
+        Ok(
+            DataId {
+                hash: hash.into(),
+                uuid,
+            }
+        )
+    }
 
     async fn archive_file(&self, path: &str) -> Result<DataId, HError>{
         //read the file into memory
-        let file_stream = OpenOptions::new()
+        let mut file_stream = OpenOptions::new()
             .read(true)
             .open(path)
             .await?;
@@ -42,11 +58,16 @@ pub trait Archiver {
             hasher.update(&buffer[..nread]);
         }
 
+        //
+        //TO DO:
+        //          save the data to the database system
+        //
+
         let hash = hasher.finalize();
         let uuid = UuidBytes::new();
         Ok(
             DataId {
-                hash,
+                hash: hash.into(),
                 uuid,
             }
         )

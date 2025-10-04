@@ -3,14 +3,15 @@
 use sha2::digest;
 use tokio::sync::RwLock;
 use async_trait::async_trait;
-use std::sync::Arc;
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 
 use crate::block::{Block, Digester};
 use crate::herrors::HError;
 use crate::chain::{BlockChain, Chain, ChainInfo, ChainInfoBuilder, ChainRef};
 
 ///a keeper's main chain, it's a wrapper of  Arc<RwLock<BlockChain<D>>>
+#[derive(Clone)]
 pub struct Main<D>  
     where D: Block + Digester
 {
@@ -25,17 +26,18 @@ impl <D> Main<D>
         }
     }
 }
-impl <D> Deref for Main<D> 
+
+///maker it easier to use for the main chain.
+impl <D> Deref for Main<D>
     where D: Block + Digester
 {
     type Target = Arc<RwLock<BlockChain<D>>>;
-
     fn deref(&self) -> &Self::Target {
         &self.main
     }
 }
-
-impl <D> DerefMut for Main<D> 
+///maker it easier to use for the main chain.
+impl <D> DerefMut for Main<D>
     where D: Block + Digester
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
@@ -44,8 +46,12 @@ impl <D> DerefMut for Main<D>
 }
 
 
+
+
+
 ///a keeper's side chains, it's a wrapper of  Arc<RwLock<Vec<BlockChain<B>>>>
 ///
+#[derive(Clone)]
 pub struct Sides <B>
     where B: Block 
 {
@@ -81,18 +87,18 @@ impl <B> Sides<B>
     }
 }
 
-impl <B> Deref for Sides<B> 
-    where B: Block 
+///maker it easier to use for the side chains.
+impl <B> Deref for Sides<B>
+    where B: Block
 {
     type Target = Arc<RwLock<Vec<BlockChain<B>>>>;
-
-    fn deref(&self) -> &Self::Target {                 
+    fn deref(&self) -> &Self::Target {
         &self.sides
     }
 }
-
-impl <B> DerefMut for Sides<B> 
-    where B: Block 
+///maker it easier to use for the side chains.
+impl <B> DerefMut for Sides<B>
+    where B: Block
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.sides
@@ -104,9 +110,9 @@ impl <B> DerefMut for Sides<B>
 ///The main chain does NOT create a new block to digest the last side chain, but
 ///the previous one of it.
 #[async_trait]
-pub trait Keeper {
-    type DigestBlock: Block + Digester;
-    type DataBlock: Block;
+pub trait Keeper: Send + Sync{
+    type DigestBlock: Block + Digester + Send + Sync;
+    type DataBlock: Block + Send + Sync;
 
     ///return the main chain within a arc read write lock.
     fn main_chain(&self) -> Main<Self::DigestBlock>;
@@ -116,7 +122,8 @@ pub trait Keeper {
     /// DEFAULT IMPLEMENTATION:
     ///return the main_chain's last block's index.
     async fn main_index(&self) -> usize{
-        let chain = self.main_chain().read().await;
+        let main_chain = self.main_chain();
+        let chain = main_chain.read().await;
         let len = chain.len();
         chain.block_ref(len - 1).unwrap().index()
     }
@@ -164,12 +171,12 @@ impl <B, D> Keeper for ChainKeeper<B, D>
     type DigestBlock = D;
     type DataBlock = B;
 
-    ///share the main chain within a arc read write lock.(just return a clone of  
-    ///  )
+    ///share the main chain within a arc read write lock.(a Main<D> struct )
     fn main_chain(&self) -> Main<D> {
         self.main.clone()
     }
     
+    ///share the side chains within a arc read write lock.(a Sides<B> struct)
     fn side_chains(&self) -> Sides<B> {
         self.sides.clone()
     }

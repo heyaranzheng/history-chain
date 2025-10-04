@@ -6,6 +6,7 @@ use bincode::{Decode, Encode};
 
 use crate::block::{Block, Carrier};
 use crate::constants::ZERO_HASH;
+use crate::uuidbytes::UuidBytes;
 use crate::hash::HashValue;
 use crate::herrors::HError;
 
@@ -120,7 +121,7 @@ pub trait Chain
     ///This is a default implementation for getting a block by data_uuid.
     /// get a block by data_uuid. 
     /// need to implement an additional trait Carrier for the block
-    fn get_block_by_data_uuid(&self, data_uuid: HashValue) -> Option<Self::Block>
+    fn get_block_by_data_uuid(&self, data_uuid: UuidBytes) -> Option<Self::Block>
         where Self::Block: Clone + Carrier
     {
         let len = self.len(); 
@@ -217,6 +218,7 @@ impl <B> BlockChain<B>
         ChainRef::from_chain_by_hash(self, hash_range)
     }
 
+    ///--------------------------------------------
      ///give a ChainInfo object to find target segment from this chain.
     pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
         let mut chain_ref: ChainRef<'_, B> = ChainRef::new(std::ptr::null(), 0);
@@ -468,7 +470,7 @@ impl <'a, B> ChainRef<'a, B>
 
     ///check if the ChainRef contains a block with the given data_uuid.
     ///return the LOCAL INDEX of the block in current chain.
-    pub fn contain_uuid(&self, uuid: HashValue) -> Option<usize>
+    pub fn contain_uuid(&self, uuid: UuidBytes) -> Option<usize>
         where B:  Block + Carrier
     {
         let len = self.len;

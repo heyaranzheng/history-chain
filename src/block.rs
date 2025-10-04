@@ -2,10 +2,11 @@ use bincode::{Encode, Decode};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
+use crate::uuidbytes::{self, UuidBytes};
 use crate::chain::BlockChain;
 use crate::hash::{Hasher, HashValue};
 use crate::herrors::HError;
-use crate::constants::ZERO_HASH;
+use crate::constants::{ZERO_HASH, ZERO_UUID};
 
 
 pub trait Block 
@@ -66,7 +67,7 @@ pub trait Carrier : Block {
     ///have an hash of data
     fn data_hash(&self) -> HashValue;
     ///have an uuid of data
-    fn data_uuid(&self) -> HashValue;
+    fn data_uuid(&self) -> UuidBytes ;
 }
 
 ///This is a marker trait for struct which can be used as args to create a new block.
@@ -75,7 +76,7 @@ pub trait BlockArgs {}
 pub struct DataBlockArgs {
     pub prev_hash: HashValue,
     pub data_hash: HashValue,
-    pub data_uuid: HashValue,
+    pub data_uuid: UuidBytes,
     pub digest_id: u32,
     pub index: u32,
 }
@@ -83,7 +84,7 @@ impl DataBlockArgs {
     pub fn new(
         prev_hash: HashValue,
         data_hash: HashValue,
-        data_uuid: HashValue,
+        data_uuid: UuidBytes,
         digest_id: u32,
         index: u32,
     ) -> Self {
@@ -134,7 +135,7 @@ pub struct DataBlock {
     //the hash of the some source data
     pub data_hash: HashValue,
     //the surce data's uuid in some system
-    pub data_uuid: HashValue,
+    pub data_uuid: UuidBytes,
     //the id of the digest block which will disgest this block
     pub digest_id: u32,
     //the index of this block in it's chain
@@ -144,7 +145,7 @@ impl DataBlock {
     fn private_new(
         prev_hash: HashValue, 
         data_hash: HashValue, 
-        data_uuid: HashValue, 
+        data_uuid: UuidBytes, 
         digest_id: u32, 
         index: u32) 
         -> Self 
@@ -200,9 +201,10 @@ impl Block for DataBlock {
         let args = DataBlockArgs::new(
             ZERO_HASH, 
             ZERO_HASH, 
-            ZERO_HASH, 
-                    digest_id, 
-        0);
+            ZERO_UUID, 
+            digest_id, 
+            0
+        );
         Self::create(args)
     }
 
@@ -245,7 +247,7 @@ impl Carrier for DataBlock {
         self.data_hash
     }
     #[inline]
-    fn data_uuid(&self) -> HashValue {
+    fn data_uuid(&self) -> UuidBytes {
         self.data_uuid
     }
 }
@@ -364,6 +366,8 @@ impl Block for DigestBlock {
 
     ///return the index of the digest block which  disgest it.
     ///Index of the WHOLE chain it blongs to. 
+    ///Although this is a digest block, it also can have another digest block to digest the 
+    ///chain which owns it.
     #[inline]
     fn digest_id(&self) -> usize {
         self.digest_id as usize
@@ -378,6 +382,5 @@ impl Digester for DigestBlock {
         self.merkle_root = merkle_root;
         Ok(merkle_root)
     }
-    
 }
 
