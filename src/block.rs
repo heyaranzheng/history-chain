@@ -81,6 +81,7 @@ pub struct DataBlockArgs {
     pub index: u32,
 }
 impl DataBlockArgs {
+    ///create a new args list for a new data block.
     pub fn new(
         prev_hash: HashValue,
         data_hash: HashValue,

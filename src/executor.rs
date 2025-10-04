@@ -1,7 +1,8 @@
 use tokio::sync::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Relaxed};
 
-use crate::block::{ Block, BlockArgs, Carrier, Digester };
+use crate::block::{ Block, BlockArgs, Carrier, DataBlockArgs, Digester };
 use crate::hash::HashValue;
 use crate::chain::{Chain, BlockChain, ChainInfo};
 use crate::herrors::HError;
@@ -18,15 +19,11 @@ pub trait Executor: Archiver {
     type DataBlock: Block + Carrier;
     type DigestBlock: Block + Digester;
 
-    ///create a new data block.
-    async fn create_block<T>(&self, args: T) -> Result<Self::DataBlock, HError>
-        where T: BlockArgs;
-    ///in oreder to create a new block, we need to provide the previous block's hash
-    ///and index in the whole chain.
-    async fn hash_and_index(&self, chain: &BlockChain<Self::DataBlock>) -> 
-        Result<(HashValue, usize), HError>;
+    ///create a block with given data, and add it to the chain_buf.
+    async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>;
     ///store a chain in keeper and return the main chain's index(digest_id).
     async fn add_chain(&mut self) -> Result<usize, HError>;
+
 
 }
 
@@ -35,7 +32,8 @@ pub struct ChainExecutor < B, D>
           D: Block + Digester,
 
 {
-    keeper: ChainKeeper<B, D>,
+    pub keeper: ChainKeeper<B, D>,
+    //--
     chain_buf: Arc<Mutex<BlockChain<B>>>, 
 }
 
@@ -43,11 +41,74 @@ impl < B, D> ChainExecutor <B, D>
     where B: Block + Carrier,
           D: Block + Digester ,
 {
-    pub  async fn new() -> Self<B, D> { 
+    pub  async fn new() -> Self
+        where B: Block + Carrier + Send + Sync,
+              D: Block + Digester + Send + Sync,
+    { 
         let keeper = ChainKeeper::<B, D>::new();
-        let chain = BlockChain::<B>::new_empty();
-        let digest_id = keeper.
-        
+        let digest_id = keeper.main_index().await + 1;
+        let chain_buf = Arc::new(
+                Mutex::new(
+                    BlockChain::<B>::new(digest_id as u32)
+                )
+            );
+        Self {
+            keeper,
+            chain_buf,
+        }   
+    }
+
+    async fn chain_is_full(&self) -> bool {
 
     }
+}
+impl <B, D> Archiver for ChainExecutor <B, D> 
+    where B: Block + Carrier,
+          D: Block + Digester,
+{}
+    
+
+#[async_trait]
+impl < B, D> Executor for ChainExecutor <B, D> 
+    where B: Block + Carrier + Send + Sync,
+          D: Block + Digester + Send + Sync,
+          B::Args: From<DataBlockArgs>,
+{
+    type DataBlock = B;
+    type DigestBlock = D;
+
+    async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>
+    {
+        //archive the data into the storage firstly
+        let data_id = self.archive_slice(data).await?;
+
+        //get the last block's refrence from the chain_buf
+        let chain = self.chain_buf.lock().await;
+        let pre_block_ref = chain.block_ref(chain.len() - 1).unwrap();
+
+        //figure out the args for the new block
+        let pre_hash = pre_block_ref.hash();
+        let index = pre_block_ref.index() + 1;
+        let digest_id = pre_block_ref.digest_id() + 1;
+        let args = DataBlockArgs::new(
+            pre_hash,
+            data_id.hash,
+            data_id.uuid,
+            digest_id as u32,
+            index as u32,
+        );
+
+        //create the new block
+        let block = B::create(B::Args::from(args));
+
+        //check if the chain is full
+        Ok(block)
+    }
+
+    async fn add_chain(&mut self) -> Result<usize, HError> {
+        
+        Ok(0)
+    }
+
+
 }

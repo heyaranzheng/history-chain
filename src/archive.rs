@@ -18,6 +18,7 @@ pub struct DataId {
 
 #[async_trait]
 pub trait Archiver {
+    ///Default implementation!
     ///create an Uuid for some data as an identifier in some database system, then 
     ///hash the data.
     ///The Uuid and the hash are returned as a DataHash struct.
@@ -38,6 +39,8 @@ pub trait Archiver {
         )
     }
 
+    ///Default implementation!
+    ///archive a file by reading it into sized memory buffer then hash the data part by part.
     async fn archive_file(&self, path: &str) -> Result<DataId, HError>{
         //read the file into memory
         let mut file_stream = OpenOptions::new()

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 
 
 use crate::block::{Block, Carrier, Digester};
-use crate::manager::ChainManager;
+use crate::executor::ChainManager;
 use crate::hash:: HashValue;
 
 

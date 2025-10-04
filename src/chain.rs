@@ -576,7 +576,7 @@ pub struct ChainInfo <B>
     pub timestamp: Option<(u64, u64)>,
     pub hash: Option<HashValue>,
     pub merkle_root: Option<HashValue>,
-    pub data_uuid: Option<HashValue>,
+    pub data_uuid: Option<UuidBytes>,
     pub data_hash: Option<HashValue>,
     _marker: PhantomData<B>,
 }
@@ -589,7 +589,7 @@ pub struct ChainInfoBuilder {
     pub timestamp: Option<(u64, u64)>,
     pub hash: Option<HashValue>,
     pub merkle_root: Option<HashValue>,
-    pub data_uuid: Option<HashValue>,
+    pub data_uuid: Option<UuidBytes>,
     pub data_hash: Option<HashValue>,
 }
 
@@ -658,7 +658,7 @@ impl  ChainInfoBuilder
     }
 
     ///data_uuid of the chain. only data block has data_uuid.
-    pub fn data_uuid(mut self, data_uuid: HashValue) -> Self {
+    pub fn data_uuid(mut self, data_uuid: UuidBytes) -> Self {
         self.data_uuid = Some(data_uuid);
         self
     }
