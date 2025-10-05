@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use crate::block::{Block, Digester};
 use crate::herrors::HError;
-use crate::chain::{BlockChain, Chain, ChainInfo, ChainInfoBuilder, ChainRef};
+use crate::chain::{BlockChain, Chain, ChainInfo, ChainInfoBuilder, ChainRef, ChainLimit};
 
 ///a keeper's main chain, it's a wrapper of  Arc<RwLock<BlockChain<D>>>
 pub struct Main<D>  
@@ -19,9 +19,9 @@ pub struct Main<D>
 impl <D> Main<D>
     where D: Block + Digester
 {
-    pub fn new(digest_id: u32) -> Self {
+    pub fn new(digest_id: u32, limit: ChainLimit) -> Self {
         Self {
-            main: Arc::new(RwLock::new(BlockChain::new(digest_id))),
+            main: Arc::new(RwLock::new(BlockChain::new(digest_id, limit))),
         }
     }
 }
@@ -184,8 +184,8 @@ impl <B, D> ChainKeeper<B, D>
     ///  a genesis block. The digest_id of this genesis block should be set from 1 not 0, because 
     /// if this chain (the main chain in this keeper) is digested by another block, the block's 
     /// index must be start from 1 in order to avoid the index of the genesis block is 0.
-    pub  fn new() -> Self {
-        let main = Main::new(1);
+    pub  fn new(limit: ChainLimit) -> Self {
+        let main = Main::new(1, limit);
         let sides = Sides::new_empty();
         Self {
             main,

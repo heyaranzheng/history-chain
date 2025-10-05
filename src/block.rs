@@ -32,6 +32,8 @@ pub trait Block
     ///The digester blocks also can have another digester block to digest the chain which 
     ///was consisted of by digest blocks. 
     fn digest_id(&self) -> usize;
+    ///timestamp of the block
+    fn timestamp(&self) -> u64;
 
     /// This is a DEFAULT IMPLEMENTATION of verify method.
     /// using "hash_verify" and "prev_hash" methods.
@@ -186,6 +188,10 @@ impl Block for DataBlock {
     fn index(&self) -> usize {
         self.index as usize
     }
+    #[inline]
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
 
     #[inline]
     fn create(args: Self::Args ) -> Self {
@@ -322,6 +328,11 @@ impl Block for DigestBlock {
     #[inline]
     fn index(&self) -> usize {
         self.digest_id as usize
+    }
+
+    #[inline]
+    fn timestamp(&self) -> u64 {
+        self.timestamp
     }
 
     #[inline]

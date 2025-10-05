@@ -26,6 +26,12 @@ pub trait Chain
     fn block_ref(&self, local_index: usize) -> Option<& Self::Block>;
     ///chain has an exactly length 
     fn len(&self) -> usize;
+    ///chain's limit information
+    fn limit(&self) -> &ChainLimit;
+    ///chain's time gap information, the local index of the two blocks with the max time gap.
+    /// Note:
+    /// ( ).0 is the local index of the block with the smaller timestamp, ( ).1 is the larger one.
+    fn time_gap_local(&self) -> (u32, u32);
 
     ///This is a default implementation.
     ///have an ablility to verify the chain. 
@@ -136,12 +142,52 @@ pub trait Chain
  
 }
 
+///a limit information for a chain.
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
+pub struct ChainLimit {
+    ///the max length of the chain.
+    max_len: usize,
+    ///the max time gap between two blocks in the chain.
+    max_time_gap: u64,
+}
+
+unsafe impl Send for ChainLimit {}
+unsafe impl Sync for ChainLimit {}
+
+impl ChainLimit {
+    pub fn new(max_len: usize, max_time_gap: u64) -> Self {
+        Self {
+            max_len,
+            max_time_gap,
+        }
+    }
+
+    pub fn max_len(&self) -> usize {
+        self.max_len
+    }
+
+    pub fn time_gap(&self) -> u64 {
+        self.max_time_gap
+    }
+    ///a default limit information for a chain.
+    ///the max length of the chain is 1000, the max time gap between two blocks is 1 day.
+    pub fn default() -> Self {
+        Self {
+            max_len: 1000,
+            //a day
+            max_time_gap: 60 * 60 * 24, 
+        }
+    }
+}
+
 //Clone Debug Encode Decode PartialEq, Iterator are implemented for BlockChain<B> 
 #[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub struct BlockChain<B>
     where B: Block  
 {
     blocks: Vec<B>,
+    limit: ChainLimit,
+    time_gap_index: (u32, u32),
 }
 
 impl <B> BlockChain<B>
@@ -151,7 +197,9 @@ impl <B> BlockChain<B>
     #[inline]
     pub fn new_empty() -> Self {
         Self {
-            blocks: Vec::<B>::new()
+            blocks: Vec::<B>::new(),
+            limit: ChainLimit::default(),
+            time_gap_index: (0, 0),
         }
     }
     
@@ -159,10 +207,13 @@ impl <B> BlockChain<B>
     ///the genesis block's all feilds are set by 0 except block's hash value, timestamp.
     ///More precisely, the block's "pre_hash" value is setted with zero like [0u8; 32], 
     ///other fields just set to 0.
-    pub fn new(digest_id: u32) -> Self {
+    ///the limit information is setted by the given value.
+    pub fn new(digest_id: u32, limit: ChainLimit) -> Self {
         let  block = B::genesis(digest_id);
         let mut chain = Self {
-            blocks: Vec::<B>::new()
+            blocks: Vec::<B>::new(),
+            limit,
+            time_gap_index: (0, 0),
         };
         chain.blocks.push(block);
         chain
@@ -198,7 +249,9 @@ impl <B> BlockChain<B>
     ///the capacity of the blocks is setted to the given value.
     pub fn empty_with_capacity(capacity: usize) -> Self {
         Self {
-            blocks: Vec::<B>::with_capacity(capacity)
+            blocks: Vec::<B>::with_capacity(capacity),
+            limit: ChainLimit::default(),
+            time_gap_index: (0, 0),
         }
     }
     
@@ -270,8 +323,15 @@ impl <B> Chain for BlockChain<B>
     
     fn len(&self) -> usize {
         self.blocks.len()  
-    } 
-    
+    }
+
+    fn limit(&self) -> &ChainLimit {
+        &self.limit
+    }
+
+    fn time_gap_local(&self) -> (u32, u32) {
+        self.time_gap_index
+    }
 }
 
 
@@ -282,6 +342,7 @@ pub struct ChainRef<'a, B>
 {
     data: *const B,
     len: usize,
+    time_gap_index: (u32, u32),
     _marker: PhantomData<&'a B>
 }
 impl <'a, B> ChainRef<'a, B> 
@@ -292,6 +353,7 @@ impl <'a, B> ChainRef<'a, B>
         Self {
             data,
             len,
+            time_gap_index: (0, 0),
             _marker: PhantomData
         }
     }
@@ -346,6 +408,7 @@ impl <'a, B> ChainRef<'a, B>
                 chain.blocks.as_ptr().add(offset)
             },
             len,
+            time_gap_index: chain.time_gap_local(),
             _marker: PhantomData
         });
     }
@@ -362,6 +425,7 @@ impl <'a, B> ChainRef<'a, B>
             Self {
             data: chain.blocks.as_ptr(),
             len,
+            time_gap_index: chain.time_gap_local(),
             _marker: PhantomData
         })
     }
@@ -516,13 +580,31 @@ impl <'a, B> ChainRef<'a, B>
     }
 
     pub fn from_slice(slice: &[B]) -> Self {
+        let mut min_time: u64 = 0;
+        let mut max_time: u64 = 0;
+        let mut min_time_index = 0 as u32;
+        let mut max_time_index = 0 as u32;
+        for i in 0..slice.len() {
+            let block = &slice[i];
+            if block.timestamp() < min_time {
+                min_time = block.timestamp();
+                min_time_index = i as u32;
+            }
+            if block.timestamp() > max_time {
+                max_time = block.timestamp();
+                max_time_index = i as u32;
+            }
+        }
+       
         Self {
             data: slice.as_ptr(),
             len: slice.len(),
+            time_gap_index: (min_time_index, max_time_index),
             _marker: PhantomData
         }
     }
 
+    ///just return a vector of blocks.
     #[inline]
     pub fn into_vec(self) -> Vec<B> 
         where B: Clone + Block
@@ -532,12 +614,41 @@ impl <'a, B> ChainRef<'a, B>
 
     ///COPY the data this ChainRef points to, and return a new BlockChain, 
     ///not a reference of pointer.
-    pub fn copy_data(&self) -> BlockChain<B>
+    ///
+    /// Note: 
+    ///     The Limit of length will set with the length of the segment of the chain.
+    ///So, we can't add any one more block to this returned chain.
+    pub fn copy_data(&self) -> Result<BlockChain<B>, HError>
         where B: Clone + Block
     {
-        let mut chain = BlockChain::<B>::new_empty();
-        chain.blocks.extend_from_slice(self.as_slice());
-        chain
+        //find out the time_gap of this segment
+        let time_gap_index = self.time_gap_index;
+        let slice = self.as_slice();
+        let blocks = slice.to_vec();
+        let (min_index, max_index) = time_gap_index;
+        let max_time = slice[max_index as usize].timestamp();
+        let min_time = slice[min_index as usize].timestamp();
+        let time_gap = max_time - min_time;
+
+        //check if the time_gap is valid
+        if time_gap < 0 {
+            return Err(
+                HError::Chain {
+                    message: format!("time gap is negative")
+                }
+            );
+        }
+
+        //use the current length of the segment as the limit of the new chain.
+        let limit = ChainLimit::new(self.len, time_gap);
+
+        Ok(
+            BlockChain {
+            blocks,
+            limit,
+            time_gap_index,
+
+        })
     }
 
 
@@ -555,6 +666,7 @@ impl <'a, B> Clone for ChainRef<'a, B>
         Self {
             data: self.data,
             len: self.len,
+            time_gap_index: self.time_gap_index,
             _marker: PhantomData
         }
     }

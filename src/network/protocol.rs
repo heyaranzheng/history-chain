@@ -312,6 +312,17 @@ impl Block for VoteBlock {
     fn index(&self) -> usize {
         self.index
     }
+
+    #[inline]
+    fn digest_id(&self) -> usize {
+        self.digest_id as usize
+    }
+
+    #[inline]
+    fn timestamp(&self) -> u64 {
+        self.timestamp
+    }
+
     ///create a new block with the given args.
     fn create(args: Self::Args ) -> Self {
         Self::private_new(
@@ -371,16 +382,7 @@ impl Block for VoteBlock {
         }
         Ok(())
     }
-    
-    ///return the index of the digest block which  disgest it.
-    ///Index of the WHOLE chain it blongs to. 
-    ///Although this is a digest block, it also can have another digest block to digest the 
-    ///chain which owns it.
-    #[inline]
-    fn digest_id(&self) -> usize {
-        self.digest_id as usize
-    }
-
+  
 }
 
 

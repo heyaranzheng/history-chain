@@ -3,7 +3,8 @@ use async_trait::async_trait;
 
 
 use crate::block::{Block, Carrier, Digester};
-use crate::executor::ChainManager;
+use crate::executor::{Executor, ChainExecutor};
+use crate::archiver::Archiver;
 use crate::hash:: HashValue;
 
 
@@ -48,7 +49,7 @@ pub enum NodeState {
 type NodeName = HashValue;
 
 pub struct UserNode<B, D> 
-    where B: Block ,
+    where B: Block + Carrier,
           D: Block + Digester
 {
     ///name of the node
@@ -60,8 +61,8 @@ pub struct UserNode<B, D>
     ///friend nodes, HashMap<name, UserNode>
     pub friends: HashMap< NodeName, UserNode<B, D>>,
     pub center_address: Option<String>,
-    ///chain's manager
-    pub chain_manager: Option<ChainManager<B, D>>,
+    ///chain's executor
+    pub executor: Option<ChainExecutor<B, D>>,
     ///node's status
     pub reputation: Reputation,
     ///node's state
@@ -69,7 +70,7 @@ pub struct UserNode<B, D>
 }
 
 impl <B, D> UserNode <B, D>
-    where B: Block ,
+    where B: Block + Carrier,
           D: Block + Digester
 {
     pub fn new(name: NodeName, capacity: usize) -> Self {
@@ -79,7 +80,7 @@ impl <B, D> UserNode <B, D>
             timestamp: 0,
             friends: HashMap::with_capacity(capacity),
             center_address: None,
-            chain_manager: None,
+            executor: None,
             reputation: Reputation::new(),
             state: NodeState::Sleepping,
         }

@@ -30,6 +30,9 @@ pub mod tools {
         Result<ChainKeeper<DataBlock, DigestBlock>, HError> 
     {
         let keeper = ChainKeeper::<DataBlock, DigestBlock>::new();
+
+        let sides = C
+
         Ok(keeper)
     }
 
