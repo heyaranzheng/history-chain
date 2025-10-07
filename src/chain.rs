@@ -286,17 +286,17 @@ impl <B> BlockChain<B>
         Ok(chain_ref)
     }
 
-    #[inline]
-    pub fn hash_select(&self, hash_range: (HashValue, HashValue)) -> Result<ChainRef<B>, HError>
-        where B: Block,
-    {
-        ChainRef::from_chain_by_hash(self, hash_range)
-    }
+    
 
     ///--------------------------------------------
      ///give a ChainInfo object to find target segment from this chain.
     pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
-        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(std::ptr::null(), 0)?;
+        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(
+            std::ptr::null(),
+            0,
+            self.origin().unwrap(),
+            self.gap()  
+        )?;
         if let  Some((start , end)) = request.index {
             chain_ref = self.index_select((start as usize, end as usize))?;
         };
@@ -371,7 +371,7 @@ impl <'a, B> ChainRef<'a, B>
 {
     ///create a new chain reference from a pointer to the data and the length of the segment.
     #[inline]
-    fn new(data: *const B, len: usize) -> Result<Self, HError>{
+    fn new(data: *const B, len: usize, time_origin: u64, time_gap: u64) -> Result<Self, HError>{
         unsafe {
             for i in 0..len {
                 if i == 0 {
@@ -380,8 +380,11 @@ impl <'a, B> ChainRef<'a, B>
                 }
                 
                 //get the pre_hash and verify the hash of each block
-                let pre_hash = &(*data.add(i - 1)).hash();
+                let pre_hash = (*data.add(i - 1)).hash();
                 let block = &(*data.add(i));
+                
+                //verify the block
+                block.verify(pre_hash, time_origin, time_gap)?
             }
         }
        
@@ -465,60 +468,6 @@ impl <'a, B> ChainRef<'a, B>
             }
         )
     }
-    
-
-    ///create a chain reference from a chain, we can chose a segment of the chain by passing
-    ///a range of hash.
-    pub fn from_chain_by_hash(chain: &'a BlockChain<B>, hash_range: (HashValue, HashValue)) 
-        -> Result<Self, HError> 
-    {
-        //verify the chain first
-        chain.verify()?;
-      
-        //if we find a block with any of the given hash, we will store the ordering number of the block
-        //into the range_index vector.
-        let mut range_index = Vec::new();
-        for  i in 0..chain.blocks.len() {
-            if chain.blocks[i].hash() == hash_range.0 ||
-                chain.blocks[i].hash() == hash_range.1 
-            {
-                range_index.push(i);
-                if range_index.len() == 2 {
-                    break;
-                }
-            }
-        }
-        match range_index.len() {
-            1 => {
-                //check if the two given hash are same
-                if hash_range.0 == hash_range.1 {
-                    let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
-                    return Ok(Self::new(data, 1)?);
-                }else {
-                    return Err(HError::Chain {
-                        message: format!("only one block with the given hash") 
-                    });
-                }
-            }
-            2 => {
-                //change the order of the range_index if the first index is greater than the second index
-                if range_index[0] > range_index[1] {
-                    range_index.swap(0, 1);
-                }
-                let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
-                let len = range_index[1] - range_index[0] + 1;
-                return Ok(Self::new(data, len)?);
-            }
-            _ => {
-                return Err(HError::Chain {
-                    message: format!("more than two blocks with the given hash")
-                });
-            }
-        }
-      
-
-    }
-
 
     ///check if the ChainRef contains a block with the given hash.
     ///return the LOCAL INDEX of the block in current chain.
