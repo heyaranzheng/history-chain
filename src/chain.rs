@@ -16,6 +16,9 @@ use crate::herrors::HError;
 ///So the mutable method like add, push, pop  is not necessary for this trait, 
 ///We just use references to the chain or a block as the input or output.
 ///If you want a mutable method for the chain, you can implement it for yourself.
+///The Chain don't need to have an increasing order of timestamp strictly.
+///every block's timestamp must be greater than genesis block's timestamp, and
+///satisify the time gap limit.
 pub trait Chain  
 {
     type Block: Block;
@@ -28,41 +31,45 @@ pub trait Chain
     fn len(&self) -> usize;
     ///chain's limit information
     fn limit(&self) -> &ChainLimit;
-    ///chain's time gap information, the local index of the two blocks with the max time gap.
-    /// Note:
-    /// ( ).0 is the local index of the block with the smaller timestamp, ( ).1 is the larger one.
-    fn time_gap_local(&self) -> (u32, u32);
+    ///every chain has a origin time, which is the timestamp of the first block in the chain(genesis 
+    /// block). The timestamp is the origin of the timestamp of this chain. Every block's timestamp 
+    /// should be greater than the genesis block's timestamp. Ann the greatest one should satisfy the
+    /// time gap limit.
+    /// gap is a biggest Offset from the origin time, Not a certain timestamp.
+    fn gap(&self) -> u64;
+    ///Default implementation:
+    ///If the chain is not empty, return the origin timestamp of this chain.
+    fn origin(&self) -> Option<u64>{
+        if self.len() == 0 {
+            return None;
+        }
+        Some(self.block_ref(0).unwrap().timestamp())
+    }
 
     ///This is a default implementation.
     ///have an ablility to verify the chain. 
     ///verify the chain by hash and index order.
     fn verify(&self) -> Result<(), HError> {
+        //check the first block
+
         let len = self.len();
         if len == 0 || len == 1 {
-            return Err(HError::Chain { message: format!("empty or single block chain") });
+            //only has one block is same as empty chain
+            return Err(HError::Chain { message: format!("empty chain") });
         }
-        //the max i is len - 2, because the last block has no next block to compare.
-        for i in  0 .. len - 2  {
+
+        //get the time start and time gap to verify the chain
+        let time_start = self.origin().unwrap();
+        let time_gap = self.gap();
+
+        //skip the first block
+        for i in  1 .. len  {
             let block_ref = self.block_ref(i ).unwrap();
-            let next_block_ref = self.block_ref(i + 1 ).unwrap();
-
-            //verify the hash of each block
-            let hash = block_ref.hash();
-            let pre_hash = next_block_ref.prev_hash();
-            if hash != pre_hash {
-                return Err(HError::Chain { 
-                    message: format!("block {}'s hash  is not equal to block {}'s pre_hash ", i, i + 1 ) 
-                });
-            }
-
-            //verify the index of each block, check if the index is in order.
-            let index = block_ref.index();
-            let next_index = next_block_ref.index();
-            if next_index != index + 1 {
-                return Err(HError::Chain {
-                    message: format!("block {}'s index is not equal to block {}'s index + 1", i, i + 1 )
-                });
-            }
+            let pre_block_ref = self.block_ref(i - 1).unwrap();
+            let pre_hash = pre_block_ref.hash();
+            
+            //verify the block
+            block_ref.verify(pre_hash, time_start, time_gap)?;
         }
         Ok(())
     }
@@ -148,17 +155,17 @@ pub struct ChainLimit {
     ///the max length of the chain.
     max_len: usize,
     ///the max time gap between two blocks in the chain.
-    max_time_gap: u64,
+    time_gap: u64,
 }
 
 unsafe impl Send for ChainLimit {}
 unsafe impl Sync for ChainLimit {}
 
 impl ChainLimit {
-    pub fn new(max_len: usize, max_time_gap: u64) -> Self {
+    pub fn new(max_len: usize, time_gap: u64) -> Self {
         Self {
             max_len,
-            max_time_gap,
+            time_gap,
         }
     }
 
@@ -167,7 +174,7 @@ impl ChainLimit {
     }
 
     pub fn time_gap(&self) -> u64 {
-        self.max_time_gap
+        self.time_gap
     }
     ///a default limit information for a chain.
     ///the max length of the chain is 1000, the max time gap between two blocks is 1 day.
@@ -175,7 +182,7 @@ impl ChainLimit {
         Self {
             max_len: 1000,
             //a day
-            max_time_gap: 60 * 60 * 24, 
+            time_gap: 60 * 60 * 24, 
         }
     }
 }
@@ -186,22 +193,13 @@ pub struct BlockChain<B>
     where B: Block  
 {
     blocks: Vec<B>,
+    //the limit information for this chain.
     limit: ChainLimit,
-    time_gap_index: (u32, u32),
 }
 
 impl <B> BlockChain<B>
     where B: Block
 {
-    ///return a chain with NO block.
-    #[inline]
-    pub fn new_empty() -> Self {
-        Self {
-            blocks: Vec::<B>::new(),
-            limit: ChainLimit::default(),
-            time_gap_index: (0, 0),
-        }
-    }
     
     ///return a chain WITH a genesis block(a header block). The length of the chain is 1.
     ///the genesis block's all feilds are set by 0 except block's hash value, timestamp.
@@ -213,45 +211,69 @@ impl <B> BlockChain<B>
         let mut chain = Self {
             blocks: Vec::<B>::new(),
             limit,
-            time_gap_index: (0, 0),
         };
         chain.blocks.push(block);
         chain
 
     }
 
+    pub fn block_verify(&self, block: &B) -> Result<(), HError> {
+        //check if this chain is empty
+        if self.blocks.len() == 0 {
+            return Err(HError::Chain { message: format!("empty chain") });
+        }
+        //verify the block's hash
+        let pre_hash = self.blocks.last().unwrap().hash();
+        let time_origin = self.origin().unwrap();
+        let time_gap = self.gap();
+        block.verify(pre_hash, time_origin, time_gap)?;
+        Ok(())
+    }
+
+    ///check if the chain is full.
+    #[inline]
+    pub fn is_full(&self) -> bool {
+        self.blocks.len() >= self.limit.max_len()
+    }
+
     ///add a block into this chain. It will check if the chain is empty and the valiadty of
     /// the block we will add.
+    /// the block's timestamp should be greater than the genesis block's timestamp(the first 
+    /// block's timestamp).
     pub fn add(&mut self, block: B) -> Result<(), HError> {
+
         //check if this chain is empty
         if self.blocks.len() == 0 {
             //check if the block is genesis block
             if block.prev_hash() != ZERO_HASH {
                 return Err(HError::Chain { message: format!("empty chain") });
             }
-
-            //add the genesis block to this chain
+            
+            //This is the first block, and it's a genesis block, so we just add the genesis 
+            //block to this chain.
             self.blocks.push(block);
             return Ok(());
         }
-
-        //verify the block's hash
-        let pre_hash = self.blocks.last().unwrap().hash();
-        block.verify(pre_hash)?;
+        //check if the chain is full
+        if self.is_full() {
+            return Err(HError::Chain { message: format!("chain is full") });
+        }
+        //verify the block
+        self.block_verify(&block)?;
 
         //add the block to this chain
         self.blocks.push(block);
+        
         Ok(())
     }
 
 
     ///create a chain WITHOUT genesis block, 
     ///the capacity of the blocks is setted to the given value.
-    pub fn empty_with_capacity(capacity: usize) -> Self {
+    fn empty_with_capacity(capacity: usize) -> Self {
         Self {
             blocks: Vec::<B>::with_capacity(capacity),
             limit: ChainLimit::default(),
-            time_gap_index: (0, 0),
         }
     }
     
@@ -274,7 +296,7 @@ impl <B> BlockChain<B>
     ///--------------------------------------------
      ///give a ChainInfo object to find target segment from this chain.
     pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
-        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(std::ptr::null(), 0);
+        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(std::ptr::null(), 0)?;
         if let  Some((start , end)) = request.index {
             chain_ref = self.index_select((start as usize, end as usize))?;
         };
@@ -328,10 +350,10 @@ impl <B> Chain for BlockChain<B>
     fn limit(&self) -> &ChainLimit {
         &self.limit
     }
-
-    fn time_gap_local(&self) -> (u32, u32) {
-        self.time_gap_index
+    fn gap(&self) -> u64 {
+        self.limit.time_gap()
     }
+ 
 }
 
 
@@ -342,23 +364,37 @@ pub struct ChainRef<'a, B>
 {
     data: *const B,
     len: usize,
-    time_gap_index: (u32, u32),
     _marker: PhantomData<&'a B>
 }
 impl <'a, B> ChainRef<'a, B> 
     where B: Block
 {
+    ///create a new chain reference from a pointer to the data and the length of the segment.
     #[inline]
-    fn new(data: *const B, len: usize) -> Self {
-        Self {
-            data,
-            len,
-            time_gap_index: (0, 0),
-            _marker: PhantomData
+    fn new(data: *const B, len: usize) -> Result<Self, HError>{
+        unsafe {
+            for i in 0..len {
+                if i == 0 {
+                    //skip the first block, whatever it is a nomal block or genesis block.
+                    continue;      
+                }
+                
+                //get the pre_hash and verify the hash of each block
+                let pre_hash = &(*data.add(i - 1)).hash();
+                let block = &(*data.add(i));
+            }
         }
+       
+        Ok(
+            Self {
+                data,
+                len,
+                _marker: PhantomData
+            }
+        )
     }
 
-    ///return a block object's reference
+    ///return an block reference by LOCAL index in the segment.
     fn block_ref(&self, local_index: usize) -> Option<&B> {
         if local_index < self.len {
             return Some(unsafe { &*self.data.add(local_index) });
@@ -370,10 +406,11 @@ impl <'a, B> ChainRef<'a, B>
 
     ///create a chain reference from a chain, we can chose a segment of the chain by passing
     ///a range of index.
-    ///Note:  if the given range have some overlap with the chain's index range, it will return  
-    /// a reference to the overlap part, or return None.
+    ///Note:   
+    ///     This will chose a common range between the given range and the chain's index range.    
     ///
-    /// Note: The chain we have now, may be a segment of completed chain, so the index is not the 
+    /// Note: 
+    ///     The chain we have now, may be a segment of completed chain, so the index is not the 
     /// ordering number of the block in its chain, but the index of the whole completed chain.
     /// Namely, chain.blocks[i].index() may not equal to i.
     pub fn  from_chain_by_index(
@@ -384,18 +421,15 @@ impl <'a, B> ChainRef<'a, B>
     {
         //check if the given chain is valid 
         chain.verify()?;
-        if chain.blocks.len() == 0 {
-            return Err(HError::Chain {
-                message: format!("empty chain")
-            });
-        }
 
         //check if the given range is valid
         if start > end {
             return Err(HError::Chain {
                 message: format!("start index is greater than end index")
             });
-        }       
+        }
+
+        //chose a common range between the given range and the chain's index range       
         let len = chain.blocks.len();
         let min_index = chain.blocks[0].index().max(start);
         let max_index = chain.blocks[len -1 ].index().min(end);
@@ -403,14 +437,16 @@ impl <'a, B> ChainRef<'a, B>
         
         let offset = min_index - chain.blocks[0].index();
         let len = max_index - min_index + 1;
-        return Ok(Self {
-            data: unsafe {
-                chain.blocks.as_ptr().add(offset)
-            },
-            len,
-            time_gap_index: chain.time_gap_local(),
-            _marker: PhantomData
-        });
+        return Ok
+        ( 
+            Self {
+                data: unsafe {
+                    chain.blocks.as_ptr().add(offset)
+                },
+                len,
+                _marker: PhantomData
+            }
+        );
     }
 
     ///return a reference to the whole chain.
@@ -423,11 +459,11 @@ impl <'a, B> ChainRef<'a, B>
         let len = chain.blocks.len();
         Ok(
             Self {
-            data: chain.blocks.as_ptr(),
-            len,
-            time_gap_index: chain.time_gap_local(),
-            _marker: PhantomData
-        })
+                data: chain.blocks.as_ptr(),
+                len,
+                _marker: PhantomData
+            }
+        )
     }
     
 
@@ -457,7 +493,7 @@ impl <'a, B> ChainRef<'a, B>
                 //check if the two given hash are same
                 if hash_range.0 == hash_range.1 {
                     let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
-                    return Ok(Self::new(data, 1));
+                    return Ok(Self::new(data, 1)?);
                 }else {
                     return Err(HError::Chain {
                         message: format!("only one block with the given hash") 
@@ -471,7 +507,7 @@ impl <'a, B> ChainRef<'a, B>
                 }
                 let data = unsafe { chain.blocks.as_ptr().add(range_index[0]) };
                 let len = range_index[1] - range_index[0] + 1;
-                return Ok(Self::new(data, len));
+                return Ok(Self::new(data, len)?);
             }
             _ => {
                 return Err(HError::Chain {
@@ -580,26 +616,9 @@ impl <'a, B> ChainRef<'a, B>
     }
 
     pub fn from_slice(slice: &[B]) -> Self {
-        let mut min_time: u64 = 0;
-        let mut max_time: u64 = 0;
-        let mut min_time_index = 0 as u32;
-        let mut max_time_index = 0 as u32;
-        for i in 0..slice.len() {
-            let block = &slice[i];
-            if block.timestamp() < min_time {
-                min_time = block.timestamp();
-                min_time_index = i as u32;
-            }
-            if block.timestamp() > max_time {
-                max_time = block.timestamp();
-                max_time_index = i as u32;
-            }
-        }
-       
         Self {
             data: slice.as_ptr(),
             len: slice.len(),
-            time_gap_index: (min_time_index, max_time_index),
             _marker: PhantomData
         }
     }
@@ -611,47 +630,6 @@ impl <'a, B> ChainRef<'a, B>
     {
         self.as_slice().to_vec()
     }
-
-    ///COPY the data this ChainRef points to, and return a new BlockChain, 
-    ///not a reference of pointer.
-    ///
-    /// Note: 
-    ///     The Limit of length will set with the length of the segment of the chain.
-    ///So, we can't add any one more block to this returned chain.
-    pub fn copy_data(&self) -> Result<BlockChain<B>, HError>
-        where B: Clone + Block
-    {
-        //find out the time_gap of this segment
-        let time_gap_index = self.time_gap_index;
-        let slice = self.as_slice();
-        let blocks = slice.to_vec();
-        let (min_index, max_index) = time_gap_index;
-        let max_time = slice[max_index as usize].timestamp();
-        let min_time = slice[min_index as usize].timestamp();
-        let time_gap = max_time - min_time;
-
-        //check if the time_gap is valid
-        if time_gap < 0 {
-            return Err(
-                HError::Chain {
-                    message: format!("time gap is negative")
-                }
-            );
-        }
-
-        //use the current length of the segment as the limit of the new chain.
-        let limit = ChainLimit::new(self.len, time_gap);
-
-        Ok(
-            BlockChain {
-            blocks,
-            limit,
-            time_gap_index,
-
-        })
-    }
-
-
 
 }
 
@@ -666,7 +644,6 @@ impl <'a, B> Clone for ChainRef<'a, B>
         Self {
             data: self.data,
             len: self.len,
-            time_gap_index: self.time_gap_index,
             _marker: PhantomData
         }
     }
@@ -788,3 +765,4 @@ impl  Default for ChainInfoBuilder
         Self::new()
     }
 }
+

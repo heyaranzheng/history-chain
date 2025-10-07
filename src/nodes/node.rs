@@ -4,7 +4,7 @@ use async_trait::async_trait;
 
 use crate::block::{Block, Carrier, Digester};
 use crate::executor::{Executor, ChainExecutor};
-use crate::archiver::Archiver;
+use crate::archive::Archiver;
 use crate::hash:: HashValue;
 
 
@@ -13,7 +13,7 @@ pub trait Node {
     ///check if the node is the center node
     fn is_center(&self) -> bool;
     ///get a friend's node information by its name
-    fn get_friend(&self, name: HashValue) -> Option<&Self>{None}
+    fn get_friend(&self, name: HashValue) -> Option<String>{None}
     ///get node's name
     fn my_name(&self) -> HashValue;
     ///get node's address
@@ -89,7 +89,7 @@ impl <B, D> UserNode <B, D>
  
 #[async_trait]
 impl <B, D> Node for UserNode<B, D>
-    where B: Block ,
+    where B: Block + Carrier,
           D: Block + Digester 
 {
     fn is_center(&self) -> bool {

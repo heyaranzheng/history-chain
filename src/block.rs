@@ -1,9 +1,11 @@
+use core::time;
+
 use bincode::{Encode, Decode};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 
 use crate::uuidbytes::{self, UuidBytes};
-use crate::chain::BlockChain;
+use crate::chain::{BlockChain, ChainLimit};
 use crate::hash::{Hasher, HashValue};
 use crate::herrors::HError;
 use crate::constants::{ZERO_HASH, ZERO_UUID};
@@ -37,16 +39,22 @@ pub trait Block
 
     /// This is a DEFAULT IMPLEMENTATION of verify method.
     /// using "hash_verify" and "prev_hash" methods.
-    /// verify the block's hash and prev_hash.
-    fn verify(&self, pre_hash: HashValue) -> Result<(), HError>{
+    /// verify the block's hash , prev_hash.
+    fn verify(&self, pre_hash: HashValue, time_start: u64, time_gap: u64 ) -> Result<(), HError> {
         self.hash_verify()?;
-        if self.prev_hash() != pre_hash {
+        let timestamp = self.timestamp();
+        if self.prev_hash() != pre_hash 
+            || timestamp < time_start 
+            || timestamp > time_start + time_gap 
+        
+        {
             return Err(
                 HError::Block { 
-                    message: format!("prev_hash is not correct, block is invalid in this chain")
+                    message: format!("prev_hash or timestamp is not correct, block is invalid in this chain")
                 }
             );
         }
+
         Ok(())
     }
 }
