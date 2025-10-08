@@ -9,13 +9,8 @@ pub mod tools {
 
     pub fn faker_data_chain(len: usize, digest_id: u32, limit: ChainLimit) -> Result<BlockChain<DataBlock>, HError> {
         //create a chain with len blocks
-        let mut chain = BlockChain::<DataBlock>::empty_with_capacity(len);
-        chain.limit = limit;
+        let mut chain = BlockChain::<DataBlock>::new(digest_id, limit);
         
-        //add genesis block
-        let genesis = DataBlock::genesis(digest_id);
-        chain.add(genesis)?;
-
         for i in 1..len  {
             let prev_hash = chain.block_ref(i).unwrap().hash();
             let data_hash = HashValue::random_hash();
@@ -28,15 +23,23 @@ pub mod tools {
         Ok(chain)
     }
 
-    use crate::keeper::{ChainKeeper};
-    pub fn faker_keeper(main_len: usize, side_max_len: usize) ->
+    use crate::keeper::{ChainKeeper, Sides};
+
+    pub fn faker_keeper(main_len: usize, side_max_len: usize, time_gap: u64) ->
         Result<ChainKeeper<DataBlock, DigestBlock>, HError> 
     {
-        let keeper = ChainKeeper::<DataBlock, DigestBlock>::new();
+        let limit = ChainLimit::new(side_max_len, time_gap);
+        let keeper = 
+            ChainKeeper::<DataBlock, DigestBlock>::new(limit);
 
-        let sides = C
+        let mut sides: Sides<DataBlock>;
+        for i in 1..main_len  {
+            let chain = faker_data_chain(side_max_len, i as u32, limit)?;
+            sides = keeper.add_side(chain)?;
+            
 
         Ok(keeper)
+        }
     }
 
 

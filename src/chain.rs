@@ -286,27 +286,10 @@ impl <B> BlockChain<B>
         Ok(chain_ref)
     }
 
-    
 
     ///--------------------------------------------
-     ///give a ChainInfo object to find target segment from this chain.
-    pub fn find_segment(&self, request: ChainInfo<B>) -> Result<ChainRef<B>, HError>{
-        let mut chain_ref: ChainRef<'_, B> = ChainRef::new(
-            std::ptr::null(),
-            0,
-            self.origin().unwrap(),
-            self.gap()  
-        )?;
-        if let  Some((start , end)) = request.index {
-            chain_ref = self.index_select((start as usize, end as usize))?;
-        };
-        if let Some(hash) = request.hash {
-            chain_ref = self.hash_select((hash, hash))?;
-        }
-
-        Ok(chain_ref)
-
-    }
+    ///give a ChainInfo object to find target segment from this chain.
+  
 
 
 

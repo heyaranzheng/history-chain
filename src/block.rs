@@ -9,6 +9,7 @@ use crate::chain::{BlockChain, ChainLimit};
 use crate::hash::{Hasher, HashValue};
 use crate::herrors::HError;
 use crate::constants::{ZERO_HASH, ZERO_UUID};
+use crate::chain::Chain;
 
 
 pub trait Block 
@@ -42,20 +43,59 @@ pub trait Block
     /// verify the block's hash , prev_hash.
     fn verify(&self, pre_hash: HashValue, time_start: u64, time_gap: u64 ) -> Result<(), HError> {
         self.hash_verify()?;
+        self.time_verify(time_start, time_gap)?;
+        if self.prev_hash() != pre_hash {
+            return Err(
+                HError::Block {
+                    message: format!("prev_hash is not correct, block is invalid in this chain")
+                }
+            );
+        }
+        Ok(())
+    }
+    ///Default implementation of time_verify method.
+    ///verify the block's timestamp, check if it's in the range of time_start and time_start + time_gap.
+    fn time_verify(&self, time_start: u64, time_gap: u64 ) -> Result<(), HError> {
         let timestamp = self.timestamp();
-        if self.prev_hash() != pre_hash 
-            || timestamp < time_start 
-            || timestamp > time_start + time_gap 
-        
+        if timestamp < time_start
+            || timestamp > time_start + time_gap
         {
             return Err(
-                HError::Block { 
-                    message: format!("prev_hash or timestamp is not correct, block is invalid in this chain")
+                HError::Block {
+                    message: format!("timestamp is not correct, block is invalid in this chain")
+                }
+            );
+        }
+        Ok(())
+    }
+
+    ///Default implementation of time_verify method.
+    ///verify the block's timestamp, check if it's in the range of time_start and time_start + time_gap.
+    fn time_verify_with_chain<C>(&self, chain: &C ) -> Result<(), HError> 
+        where C: Chain,
+
+    {
+        if chain.len() == 0 {
+            return Err(
+                HError::Block {
+                    message: format!("chain is empty, can't verify the block we have now!")
+                }
+            )
+        }
+        let time_start = chain.origin().unwrap();
+        let time_gap = chain.gap();
+        let timestamp = self.timestamp();
+        if timestamp < time_start
+            || timestamp > time_start + time_gap
+        {
+            return Err(
+                HError::Block {
+                    message: format!("timestamp is not correct, block is invalid in this chain")
                 }
             );
         }
 
-        Ok(())
+        Ok(())   
     }
 }
 
@@ -66,7 +106,9 @@ pub trait Block
 pub trait Digester: Block {
     ///digester has a method to digest a chain.
     ///This is the method to caculate the merkle root of a given chain. 
-    fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError>;
+    fn digest<B: Block + Clone>(chain: &BlockChain<B>) -> Result<HashValue, HError>;
+    ///return the length of the chain which is belonged to this block.
+    fn length(&self) -> u32;
 }
 
 ///have an ability to store data's hash value in it's own block, and return it's hash value.
@@ -247,6 +289,7 @@ impl Block for DataBlock {
         Ok(())
     }
 
+   
     ///return the index of the digest block which  disgest it.
     ///Index of the WHOLE chain it blongs to. 
     #[inline]
@@ -268,20 +311,20 @@ impl Carrier for DataBlock {
 }
 
 
-
+///used to disgest a chain.
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct DigestBlock {
-    //the hash of the block
+    ///the hash of the block
     pub hash: HashValue,
-    //the id of this block
+    ///the id of this block
     pub digest_id: u32,
-    //the timestamp of the block
+    ///the timestamp of the block
     pub timestamp: u64,
-    //the hash of the previous block
+    ///the hash of the previous block
     pub prev_hash: HashValue,
-    //the merkle root of the chain which is belonged to this block
+    ///the merkle root of the chain which is belonged to this block
     pub merkle_root: HashValue,
-    //the length of the chain which is belonged to this block
+    ///the length of the chain which is belonged to this block
     pub length: u32,
 }
 
@@ -396,11 +439,14 @@ impl Block for DigestBlock {
 
 
 impl Digester for DigestBlock {
-    fn digest<B: Block + Clone>(&mut self, chain: &BlockChain<B>) -> Result<HashValue, HError> 
+    fn digest<B: Block + Clone>(chain: &BlockChain<B>) -> Result<HashValue, HError> 
     {
         let merkle_root = HashValue::merkle_root(chain)?;
-        self.merkle_root = merkle_root;
         Ok(merkle_root)
+    }
+
+    fn length(&self) -> u32 {
+        self.length
     }
 }
 

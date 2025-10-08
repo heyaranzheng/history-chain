@@ -6,7 +6,7 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
-use crate::block::{Block, Digester};
+use crate::block::{Block, Digester, DigestBlockArgs};
 use crate::herrors::HError;
 use crate::chain::{BlockChain, Chain, ChainInfo, ChainInfoBuilder, ChainRef, ChainLimit};
 
@@ -79,20 +79,71 @@ impl <B> Sides<B>
 
     ///add a new block to the last side chain.
     async fn  add_block(&self, block: B) -> Result<usize, HError> {
-        //check the block first
-        let sides = self.sides.read().await;
-        let chain = &sides[sides.len() - 1];
-        let pre_hash = chain.block_ref(chain.len() - 1).unwrap().hash();
-        block.verify(pre_hash)?;
-        drop(sides);
-
-        //add the block to the last side chain.
+        //get the side chain.
         let mut sides = self.sides.write().await;
+        
+        //add the block to the last side chain.
         let sides_len = sides.len();
         let chain = &mut sides[sides_len - 1];
         let  index = block.index();
+        //block will be verified in the add function.
         chain.add(block)?;
         Ok(index)
+    }
+
+    ///add a new chain to the sides
+    async fn add_chain<D>(&self, chain: BlockChain<B>, main: &Main<D>) -> Result<(), HError> 
+        where D: Block + Digester, 
+            D::Args: From<DigestBlockArgs>,
+            B: Block + Clone,
+
+    {
+        //verify the chain
+        chain.verify()?;
+
+        //caculate the merkle root of the chain
+        let merkle_root = D::digest(&chain)?;
+        let length = chain.len() as u32;
+
+
+        //at hear, sides and main are locked at the same time.
+        //create a new digest block for main
+        let mut main_chain = main.write().await;
+        let mut sides = self.write().await;
+
+        //check if the main chain is full.
+        //the sides's capacity is the same as the main chain's capacity.
+
+        if main_chain.is_full() {
+            return Err(
+                HError::ChainFull { message: 
+                    format!("main chain is full, can't add new chain to the sides")
+                }
+            )
+        }
+
+        let pre_block = main_chain.block_ref(main_chain.len() - 1).unwrap();
+        let digest_args = DigestBlockArgs {
+            prev_hash: pre_block.hash(),
+            merkle_root: merkle_root,
+            length,
+            digest_id: pre_block.index() as u32 + 1,
+        };
+        let args = D::Args::from(digest_args);
+        let digester_block = D::create(args);
+
+        //verify the digest block's  timestamp 
+        let time_start = main_chain.origin().unwrap();
+        let time_gap = main_chain.gap();
+        digester_block.time_verify( time_start, time_gap)?;
+
+        //every thing is ok, add the digest block to the main chain.
+        main_chain.add(digester_block)?;
+
+        //add the chain to the side chains.
+        sides.push(chain);
+
+        Ok(())
     }
 }
 
