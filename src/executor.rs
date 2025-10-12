@@ -1,9 +1,10 @@
+
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
-use crate::block::{ Block, BlockArgs, Carrier, DataBlockArgs, Digester };
+use crate::block::{ Block, BlockArgs, Carrier, DataBlockArgs, DigestBlockArgs, Digester };
 use crate::hash::HashValue;
 use crate::chain::{Chain, BlockChain, ChainInfo, ChainLimit};
 use crate::herrors::HError;
@@ -17,13 +18,16 @@ use async_trait::async_trait;
 ///
 #[async_trait]
 pub trait Executor: Archiver {
-    type DataBlock: Block + Carrier;
-    type DigestBlock: Block + Digester;
+    type DataBlock: Block + Carrier<Args = Self::DataArgs>;
+    type DigestBlock: Block + Digester<Args = Self::DigestArgs>;
+    type DataArgs: From<DataBlockArgs>;
+    type DigestArgs: From<DigestBlockArgs>;
 
-    ///create a block with given data, and add it to the chain_buf.
+    /// create a block with given data (data is used to create a data_hash, not a block itself ), and 
+    /// add it to the chain_buf.
     async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>;
     ///add a new chain to the keeper
-    async fn add_chain(&mut self) -> Result<(), HError>;
+    async fn add_chain(&mut self, chain: BlockChain<Self::DataBlock>) -> Result<(), HError>;
 }
 
 pub struct ChainExecutor < B, D> 
@@ -72,10 +76,13 @@ impl <B, D> Archiver for ChainExecutor <B, D>
 impl < B, D> Executor for ChainExecutor <B, D> 
     where B: Block + Carrier + Send + Sync,
           D: Block + Digester + Send + Sync,
+          D::Args: From<DigestBlockArgs>,
           B::Args: From<DataBlockArgs>,
 {
     type DataBlock = B;
     type DigestBlock = D;
+    type DigestArgs = D::Args;
+    type DataArgs = B::Args;
 
     async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>
     {
@@ -107,17 +114,40 @@ impl < B, D> Executor for ChainExecutor <B, D>
         Ok(block)
     }
 
-    async fn add_chain(&mut self) -> Result<usize, HError> 
+    ///add a new chain to the keeper's sides, and create a new digest block for keeper's 
+    /// main chain.
+    async fn add_chain(&mut self, chain: BlockChain<B>) -> Result<(), HError>
     {
-        //verify the chain
-        
-        //lock the keeper's data
-        let (main_guard, sides_guard) 
-            = self.keeper.write_keeper().await;
-        //check if the main chain is empty
-        main_guard.is_empty()?;
-        //get the last diegest block's index
-        let digest_id = main_guard.last_index().unwrap();
+        //Note:
+        //  the chain's valibility will be checked in the keeper's add_chain method.
+        //so we don't need to check it again here.
+
+        //lock keeper
+        let mut keeper = self.keeper.write().await;
+        //get the main chain's reference
+        let main = keeper.main_mut();
+        let last_digest = main.last_block_ref().unwrap();
+
+        //figure out the args for the new digest block
+        let prev_hash = last_digest.hash();
+        let merkle_root = D::digest(&chain)?;
+        let length = chain.len() as u32;
+        let digest_id = last_digest.index() as u32 + 1;
+
+        //create the new digest block
+        let digest_args = 
+            DigestBlockArgs::new(prev_hash, merkle_root, length, digest_id);
+        let block = D::create(D::Args::from(digest_args));
+
+        //add the new block to the main chain
+        main.add_block(block)?;
+
+        //add the chain to the sides,
+        //the chain's valibility will be checked in the keeper's add_chain method.
+        let sides = keeper.sides_mut();
+        sides.add_chain(digest_id , chain)?;
+
+        Ok(())
         
     }
 

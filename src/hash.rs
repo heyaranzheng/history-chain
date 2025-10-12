@@ -70,7 +70,7 @@ pub trait Hasher {
   
     ///caculate the merkle root by a given chain
     fn merkle_root <B> (chain: &BlockChain<B> ) -> Result<HashValue, HError>
-        where B: Block + Clone,
+        where B: Block ,
     {
         let mut current_hashs: Vec<HashValue> = chain.iter().map(|b| b.hash().clone() ).collect();
       

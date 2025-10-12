@@ -644,8 +644,9 @@ impl <D> Main<D>
             data,
         }
     }
-    
-    pub fn add(&mut self, block: D) -> Result<(), HError> {
+
+    ///add a new block to this main.
+    pub fn add_block(&mut self, block: D) -> Result<(), HError> {
         //get the last block's hash
         if let Some(pre_block ) = self.last_block_ref(){
             let pre_hash = pre_block.hash();
@@ -667,8 +668,6 @@ impl <D> Main<D>
             }
         )
     }
-
-
 
 }
 

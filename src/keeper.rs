@@ -29,6 +29,10 @@ pub trait Keeper: Send + Sync{
     fn main_ref(&self) -> &Main<Self::DigestBlock>;
     ///return a sides reference 
     fn sides_ref(&self) -> &Sides<Self::DataBlock>;
+    //return the mutable reference of the main chain
+    fn main_mut(&mut self) -> &mut Main<Self::DigestBlock>;
+    //return the mutable reference of the sides
+    fn sides_mut(&mut self) -> &mut Sides<Self::DataBlock>;
 
     ///Default implementation:
     ///return a side chain by digest_id.
@@ -91,6 +95,12 @@ impl <B, D> Keeper for ChainKeeper<B, D>
 
     fn sides_ref(&self) -> &Sides<Self::DataBlock> {
         &self.sides
+    }
+    fn main_mut(&mut self) -> &mut Main<Self::DigestBlock> {
+        &mut self.main
+    }
+    fn sides_mut(&mut self) -> &mut Sides<Self::DataBlock> {
+        &mut self.sides
     }
 
 }

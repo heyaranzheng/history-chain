@@ -106,7 +106,7 @@ pub trait Block
 pub trait Digester: Block {
     ///digester has a method to digest a chain.
     ///This is the method to caculate the merkle root of a given chain. 
-    fn digest<B: Block + Clone>(chain: &BlockChain<B>) -> Result<HashValue, HError>;
+    fn digest<B: Block >(chain: &BlockChain<B>) -> Result<HashValue, HError>;
     ///return the length of the chain which is belonged to this block.
     fn length(&self) -> u32;
 }
@@ -439,7 +439,7 @@ impl Block for DigestBlock {
 
 
 impl Digester for DigestBlock {
-    fn digest<B: Block + Clone>(chain: &BlockChain<B>) -> Result<HashValue, HError> 
+    fn digest<B: Block >(chain: &BlockChain<B>) -> Result<HashValue, HError> 
     {
         let merkle_root = HashValue::merkle_root(chain)?;
         Ok(merkle_root)
