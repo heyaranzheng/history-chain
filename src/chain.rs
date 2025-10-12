@@ -1,10 +1,12 @@
 
-
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::iter::Iterator;
+use std::ops::{Deref, DerefMut};
 use bincode::{Decode, Encode};
+use sha2::digest;
 
-use crate::block::{Block, Carrier};
+use crate::block::{Block, Carrier, Digester};
 use crate::constants::ZERO_HASH;
 use crate::uuidbytes::UuidBytes;
 use crate::hash::HashValue;
@@ -39,6 +41,22 @@ pub trait Chain
     fn gap(&self) -> u64;
     ///Default implementation:
     ///If the chain is not empty, return the origin timestamp of this chain.
+    ///
+    /// Note:
+    ///     if the chain is derived from another chain's segment, the origin timestamp is the 
+    /// timestamp of the first block in the segment. We don't require the origin block is the 
+    /// real genesis block of some orignal chain.
+    ///     So, the range of timestamp will be greater than the origin timestamp if the first block 
+    /// is not the genesis block. If we want to limit the range, we should adjust the gap limit, when
+    /// we create that chain from a segment of another chain.
+    ///     And the origin's timestamp must be the smallest one in the chain, if there is a segment of 
+    /// chain, we must chose a suitable block as the origin of the new chain, it means the block with
+    /// the smallest timestamp in the segment we want. So there is a cutting process to get a new chain
+    /// from a segment of another chain.
+    /// For example: 
+    ///     4 -> 5 -> 2 -> 3 -> 7 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 (timestamp of blocks)
+    /// this can't be as a new chain, should be cutted into two chains like this:
+    ///     4 -> 5, 2-> 3 -> 7 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 (timestamp of blocks)
     fn origin(&self) -> Option<u64>{
         if self.len() == 0 {
             return None;
@@ -72,6 +90,36 @@ pub trait Chain
             block_ref.verify(pre_hash, time_start, time_gap)?;
         }
         Ok(())
+    }
+    
+    ///This is a default implementation.
+    /// if the chain is empty, return an error.
+    fn is_empty(&self) -> Result<(), HError> {
+        if self.len() == 0 {
+            return Err(HError::Chain { message: format!("empty chain") });
+        }
+        Ok(())
+    }
+
+    ///This is a default implementation.
+    ///return the last block's reference in the chain.
+    fn last_block_ref(&self) -> Option<& Self::Block> {
+        let len = self.len();
+        if len == 0 {
+            return None;
+        }
+        Some(self.block_ref(len - 1).unwrap())
+    }
+
+    ///This is a default implementation.
+    ///return the index of the last block in the chain.
+    fn last_index(&self) -> Option<usize> {
+        let len = self.len();
+        if len == 0 {
+            return None;
+        }
+        let block_ref = self.block_ref(len - 1).unwrap();
+        Some(block_ref.index())
     }
 
     ///This is a default implementation.
@@ -288,6 +336,7 @@ impl <B> BlockChain<B>
 
 
     ///--------------------------------------------
+    /// pub fn find_segment(&self, range: (u64, u64)) -> Result<ChainRef<B>, HError>
     ///give a ChainInfo object to find target segment from this chain.
   
 
@@ -580,6 +629,116 @@ impl <'a, B> Clone for ChainRef<'a, B>
         }
     }
 }
+
+pub struct Main<D>
+    where D: Block + Digester,
+{
+    data: BlockChain<D>,
+}
+impl <D> Main<D>
+    where D: Block + Digester,
+{
+    pub fn new(digest_id: u32, limit: ChainLimit) -> Self {
+        let data = BlockChain::new(digest_id, limit);
+        Self {
+            data,
+        }
+    }
+    
+    pub fn add(&mut self, block: D) -> Result<(), HError> {
+        //get the last block's hash
+        if let Some(pre_block ) = self.last_block_ref(){
+            let pre_hash = pre_block.hash();
+            let time_start = self.origin().unwrap();
+            let time_gap = self.gap();
+        
+            //verify the block 
+            block.verify(pre_hash, time_start, time_gap)?;
+
+            //add the block to this chain
+            self.data.add(block);
+
+            return Ok(());
+        }
+        
+        Err(
+            HError::Chain { message: 
+                format!("Main chain is empty, can't add block." )
+            }
+        )
+    }
+
+
+
+}
+
+///Main is a chain with Digester block, should be implemented with Chain trait.
+impl <D> Chain for Main<D>
+    where D: Block + Digester,
+{
+    type Block = D;
+    fn block_ref(&self, local_index: usize) -> Option<& Self::Block> {
+        self.data.block_ref(local_index)
+    }
+    fn gap(&self) -> u64 {
+        self.data.gap()
+    }
+    fn len(&self) -> usize {
+        self.data.len()
+    }
+    fn origin(&self) -> Option<u64> {
+        self.data.origin()
+    }
+    fn is_empty(&self) -> Result<(), HError> {
+        self.data.is_empty()
+    }
+    fn limit(&self) -> &ChainLimit {
+        self.data.limit()
+    }
+}
+
+///this is a chain collection, which contains multiple chains, each chain has a unique digest_id.
+pub struct Sides<B>
+    where B: Block + Carrier,
+{
+    data: HashMap<u32, BlockChain<B>>,
+}
+
+impl <B> Deref for Sides<B> 
+    where B: Block + Carrier,
+{
+    type Target = HashMap<u32, BlockChain<B>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl <B> DerefMut for Sides<B>
+    where B: Block + Carrier,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl <B> Sides<B> 
+    where B: Block + Carrier,
+{
+    pub fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+        }
+    }
+
+    pub fn add_chain(&mut self, digest_id: u32, chain: BlockChain<B>) -> Result<(), HError> {
+        //check if the given chain is valid
+        chain.verify()?;
+        self.insert(digest_id, chain);
+        Ok(())
+    }
+}
+
 
 
 ///this is used to store the information of a chain for searching or describing.

@@ -1,12 +1,13 @@
 use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 use crate::block::{ Block, BlockArgs, Carrier, DataBlockArgs, Digester };
 use crate::hash::HashValue;
 use crate::chain::{Chain, BlockChain, ChainInfo, ChainLimit};
 use crate::herrors::HError;
-use crate::keeper::{Keeper, Main, Sides, ChainKeeper};
+use crate::keeper::{Keeper, ChainKeeper};
 use crate::archive::Archiver;
 
 use async_trait::async_trait;
@@ -21,10 +22,8 @@ pub trait Executor: Archiver {
 
     ///create a block with given data, and add it to the chain_buf.
     async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>;
-    ///store a chain in keeper and return the main chain's index(digest_id).
-    async fn add_chain(&mut self) -> Result<usize, HError>;
-
-
+    ///add a new chain to the keeper
+    async fn add_chain(&mut self) -> Result<(), HError>;
 }
 
 pub struct ChainExecutor < B, D> 
@@ -32,7 +31,8 @@ pub struct ChainExecutor < B, D>
           D: Block + Digester,
 
 {
-    pub keeper: ChainKeeper<B, D>,
+    ///lock the keeper's data
+    pub keeper: Arc<RwLock<ChainKeeper<B, D>>>,
     chain_buf: Arc<Mutex<BlockChain<B>>>, 
 }
 
@@ -44,11 +44,15 @@ impl < B, D> ChainExecutor <B, D>
         where B: Block + Carrier + Send + Sync,
               D: Block + Digester + Send + Sync,
     { 
-        let keeper = ChainKeeper::<B, D>::new(limit.clone());
-        let digest_id = keeper.main_index().await + 1;
+        let keeper = 
+            Arc::new(RwLock::new(
+                ChainKeeper::<B, D>::new(limit.clone())
+            ));
+
+        //create a new chain_buf, which will be digested by a digester block the index is 1.
         let chain_buf = Arc::new(
                 Mutex::new(
-                    BlockChain::<B>::new(digest_id as u32, limit)
+                    BlockChain::<B>::new(1, limit)
                 )
             );
         Self {
@@ -56,7 +60,6 @@ impl < B, D> ChainExecutor <B, D>
             chain_buf,
         }   
     }
-
  
 }
 impl <B, D> Archiver for ChainExecutor <B, D> 
@@ -104,9 +107,18 @@ impl < B, D> Executor for ChainExecutor <B, D>
         Ok(block)
     }
 
-    async fn add_chain(&mut self) -> Result<usize, HError> {
+    async fn add_chain(&mut self) -> Result<usize, HError> 
+    {
+        //verify the chain
         
-        Ok(0)
+        //lock the keeper's data
+        let (main_guard, sides_guard) 
+            = self.keeper.write_keeper().await;
+        //check if the main chain is empty
+        main_guard.is_empty()?;
+        //get the last diegest block's index
+        let digest_id = main_guard.last_index().unwrap();
+        
     }
 
 
