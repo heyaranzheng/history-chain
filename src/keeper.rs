@@ -46,6 +46,22 @@ pub trait Keeper: Send + Sync{
         let chain_ref =sides_ref.get(&digest_id);
         return chain_ref;
     }
+
+    ///Default implementation:
+    ///check if the keeper is full.
+    ///If the main chain is full, we say the keeper is full.
+    fn is_full(&self) -> bool {
+        let main_ref = self.main_ref();
+        let limit = main_ref.limit();
+        
+        let len = main_ref.len();
+        if len > limit.max_len() {
+            return true;
+        }
+        return false;
+    }
+
+    
 }
 
  
@@ -74,6 +90,7 @@ impl <B, D> ChainKeeper<B, D>
             sides, 
         }
     }
+
 
 }
 unsafe impl <B, D> Send for ChainKeeper<B, D> 

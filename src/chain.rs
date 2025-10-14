@@ -1,5 +1,6 @@
 
 use std::collections::HashMap;
+use std::fmt::format;
 use std::marker::PhantomData;
 use std::iter::Iterator;
 use std::ops::{Deref, DerefMut};
@@ -210,6 +211,7 @@ unsafe impl Send for ChainLimit {}
 unsafe impl Sync for ChainLimit {}
 
 impl ChainLimit {
+    ///create a new limit information for a chain.
     pub fn new(max_len: usize, time_gap: u64) -> Self {
         Self {
             max_len,
@@ -217,13 +219,48 @@ impl ChainLimit {
         }
     }
 
+    ///the max length of the chain.
     pub fn max_len(&self) -> usize {
         self.max_len
     }
 
+    ///the max time gap we can have between the new block and the origin block.
     pub fn time_gap(&self) -> u64 {
         self.time_gap
     }
+
+    pub fn length_check(&self, len: usize) -> Result<(), HError> {
+        if len > self.max_len {
+            return Err(
+                HError::Chain { 
+                    message: format!("chain length is too long, max length is {}", self.max_len)
+                }
+            );
+        }
+        Ok(())
+    }
+
+
+    pub fn time_check<B>(&self, origin: u64, block: &B) -> Result<(), HError> 
+        where B: Block,
+    {
+       
+        //check if the timestamp is over the time gap limit
+        let time_start = origin;
+        let time_gap = self.time_gap;
+        if block.timestamp() > time_start + time_gap {
+            return Err(
+                HError::Chain { 
+                    message: 
+                        format!("the time gap between the new block and the origin 
+                        block is too long, max time gap is {}", self.time_gap)
+                }
+            );
+        }
+
+        Ok(())
+    }
+
     ///a default limit information for a chain.
     ///the max length of the chain is 1000, the max time gap between two blocks is 1 day.
     pub fn default() -> Self {
@@ -233,6 +270,7 @@ impl ChainLimit {
             time_gap: 60 * 60 * 24, 
         }
     }
+
 }
 
 //Clone Debug Encode Decode PartialEq, Iterator are implemented for BlockChain<B> 
@@ -657,7 +695,7 @@ impl <D> Main<D>
             block.verify(pre_hash, time_start, time_gap)?;
 
             //add the block to this chain
-            self.data.add(block);
+            self.data.add(block)?;
 
             return Ok(());
         }

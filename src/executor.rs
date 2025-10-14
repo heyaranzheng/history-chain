@@ -25,7 +25,7 @@ pub trait Executor: Archiver {
 
     /// create a block with given data (data is used to create a data_hash, not a block itself ), and 
     /// add it to the chain_buf.
-    async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>;
+    async fn add_block(&mut self, data: &[u8]) -> Result<Self::DataBlock, HError>;
     ///add a new chain to the keeper
     async fn add_chain(&mut self, chain: BlockChain<Self::DataBlock>) -> Result<(), HError>;
 }
@@ -44,7 +44,7 @@ impl < B, D> ChainExecutor <B, D>
     where B: Block + Carrier,
           D: Block + Digester ,
 {
-    pub  async fn new(limit: ChainLimit) -> Self
+    pub  fn new(limit: ChainLimit) -> Self
         where B: Block + Carrier + Send + Sync,
               D: Block + Digester + Send + Sync,
     { 
@@ -84,7 +84,7 @@ impl < B, D> Executor for ChainExecutor <B, D>
     type DigestArgs = D::Args;
     type DataArgs = B::Args;
 
-    async fn add_block(&self, data: &[u8]) -> Result<Self::DataBlock, HError>
+    async fn add_block(&mut self, data: &[u8]) -> Result<Self::DataBlock, HError>
     {
         //archive the data into the storage firstly
         let data_id = self.archive_slice(data).await?;
@@ -124,6 +124,14 @@ impl < B, D> Executor for ChainExecutor <B, D>
 
         //lock keeper
         let mut keeper = self.keeper.write().await;
+
+        //chcek if the keeper is full
+        if keeper.is_full() {
+            return Err(HError::Executor { 
+                message: format!("The keeper is full, can't add a new chain.")
+            });
+        } 
+
         //get the main chain's reference
         let main = keeper.main_mut();
         let last_digest = main.last_block_ref().unwrap();
