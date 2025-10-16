@@ -60,6 +60,8 @@ pub enum HError {
     
     #[error("Identity error: {message}\n")]
     Identity {message: String},
+    #[error("Nodes error: {message}\n")]
+    Nodes {message: String},
 }
 
 ///for pipe 

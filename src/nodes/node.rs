@@ -6,30 +6,73 @@ use crate::block::{Block, Carrier, Digester};
 use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
+use crate::herrors::HError;
 
+pub struct Route {
+    name: HashValue,
+    address: String,
+}
+
+impl Route {
+    pub fn new(name: HashValue, address: String) -> Self {
+        Self {
+            name,
+            address,
+        }
+    }
+}
 
 #[async_trait]
 pub trait Node {       
     ///check if the node is the center node
     fn is_center(&self) -> bool;
-    ///get a friend's node information by its name
-    fn get_friend(&self, name: HashValue) -> Option<String>{None}
     ///get node's name
     fn my_name(&self) -> HashValue;
     ///get node's address
     fn my_address(&self) -> Option<String>;
+    ///check if the node is a friend 
+    fn is_friend(&self, name: HashValue) -> bool;
+
+    ///get a path or a route from one self node to the target node.
+    ///it's a list of node's name and its' address, between the two nodes.
+    ///Form example:
+    /// A wants to find D, B is one of A's friend, C is another friend of B, D is the target node.
+    /// A's path or a route to D is [A, B, C, D]
+    async fn search_name(&self, name: HashValue) -> Result< Route, HError>{
+        
+    }
+
+
+    ///make a friend with the given node's name
+    async fn make_friend(&self, name: HashValue) -> Result<(), HErrror>{
+        //check if the given node is already a friend, if it is, return Ok(())
+        if self.is_friend(name) {
+            return Ok(());
+        }
+        
+        // can make them concurencey here!!!
+        //get an intro list of node's name and its' address, between the two nodes,
+        //including the target node's name and its' address.
+        let intro_list= self.search_name(name).await?;
+
+        //check the reputation of the introducer node, if it is good enough
+        Ok(())
+
+
+
+    }
 }
 
 
 ///The reputaion of the node in the network.
 pub struct Reputation {
     ///node's reputation score, default is 0
-    pub score: u8,
+    score: u8,
 }
 impl Reputation {
     pub fn new() -> Self {
         Self {
-            score: 0,
+            score: 60,
         }
     }
 }
@@ -47,63 +90,6 @@ pub enum NodeState {
 }
 
 type NodeName = HashValue;
-
-pub struct UserNode<B, D> 
-    where B: Block + Carrier,
-          D: Block + Digester
-{
-    ///name of the node
-    pub name: NodeName,
-    ///address of the node
-    pub address: Option<String>,
-    ///node's birthday
-    pub timestamp: u64,
-    ///friend nodes, HashMap<name, UserNode>
-    pub friends: HashMap< NodeName, UserNode<B, D>>,
-    pub center_address: Option<String>,
-    ///chain's executor
-    pub executor: Option<ChainExecutor<B, D>>,
-    ///node's status
-    pub reputation: Reputation,
-    ///node's state
-    pub state: NodeState,
-}
-
-impl <B, D> UserNode <B, D>
-    where B: Block + Carrier,
-          D: Block + Digester
-{
-    pub fn new(name: NodeName, capacity: usize) -> Self {
-        Self {
-            name,
-            address: None,
-            timestamp: 0,
-            friends: HashMap::with_capacity(capacity),
-            center_address: None,
-            executor: None,
-            reputation: Reputation::new(),
-            state: NodeState::Sleepping,
-        }
-    }
-}
- 
-#[async_trait]
-impl <B, D> Node for UserNode<B, D>
-    where B: Block + Carrier,
-          D: Block + Digester 
-{
-    fn is_center(&self) -> bool {
-        false
-    }
-    #[inline]
-    fn my_address(&self) -> Option<String> {
-        self.address.clone()
-    }
-    #[inline]
-    fn my_name(&self) -> HashValue {
-        self.name
-    }
-}
     
 
 
