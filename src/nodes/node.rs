@@ -7,44 +7,98 @@ use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
+use crate::network::protocol::{Message, MessageType};
 
-pub struct Route {
+///Note:
+///     Nodeinfo is not common way to describe a node in the network.
+///     It is needed if Node A wants to describe Node B, all the information in NodeInfo is 
+/// for Node A, not for other nodes. 
+///     Namely, the NodeInfo of Node B for Node A ONLY presents the perspectives of Node A to 
+/// Node B, not the whole network's perspective.
+#[derive(Debug, Clone)]
+pub struct NodeInfo {
     name: HashValue,
-    address: String,
+    /// Node can have serveral usual addresses for connecting to the node,
+    ///if we can't connect to the node by any of these addresses, we can try to connect to some 
+    ///server to get the node's current address, if the node is in the network now.
+    address: Vec<String>,
+    ///the caller, if we can't use those addresses to connect to the node, we can ask the caller
+    caller: NodeName,
+    ///the node's reputation for this instance's owner, not for whole the network.
+    reputation: Reputation,
+    ///the last time the node was connected to the network, in seconds.
+    last_conn: u64,
+    ///the state of last connection
+    last_state: NodeState,
+    ///the number of times the node has been connected to the network
+    meeting_count: u32,
+    ///the successful conections rate of the node by the way using addresses
+    conn_rate: f32,
+    ///who introduced this node to me？
+    introducer: NodeName,
+
 }
 
-impl Route {
-    pub fn new(name: HashValue, address: String) -> Self {
-        Self {
-            name,
-            address,
-        }
-    }
-}
+
 
 #[async_trait]
 pub trait Node {       
-    ///check if the node is the center node
-    fn is_center(&self) -> bool;
     ///get node's name
-    fn my_name(&self) -> HashValue;
+    fn name(&self) -> HashValue;
     ///get node's address
-    fn my_address(&self) -> Option<String>;
+    fn address(&self) -> String;
+    ///get node's friends
+    fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
+    
+    ///Default Implmentation:
     ///check if the node is a friend 
-    fn is_friend(&self, name: HashValue) -> bool;
+    fn is_friend(&self, name: HashValue) -> bool{
+        self.friends().contains_key(&name)
+    }
 
-    ///get a path or a route from one self node to the target node.
-    ///it's a list of node's name and its' address, between the two nodes.
-    ///Form example:
-    /// A wants to find D, B is one of A's friend, C is another friend of B, D is the target node.
-    /// A's path or a route to D is [A, B, C, D]
+    ///Default Implmentation:
+    ///get a firend's info 
+    fn get(&self, name: HashValue) -> Option<NodeInfo>{
+        let info = self.friends().get(&name);
+        if let Some(info) = info {
+            Some(info.clone())
+        } else {
+            None
+        }
+    }
+    ///Default Implmentation:
+    ///send a message to one of node's friend for introducing a new node
+    async fn make_friend(&self, name: HashValue) -> Result<(), HError>{
+        //check if the introducer is a friend. If not, return error
+        if self.is_friend(name) {
+            return Err(HError::Message {message: "introducer is not your friend".to_string()});
+        }
+
+        let msg = Message::new(
+            self.name(), name, Payload::);
+    }
+
+
+    ///Default Implmentation:
+    ///a node can introduce some nodes to his friend, if his friend wants to make more friends
+    ///Those nodes which are introduced must have a good reputation (> 80) and active state.
+    async fn introduce(&self, introducer: NodeName) -> Result<Vec<NodeInfo>, HError>{
+        let msg = Message::new(
+            self.name(), 
+            introducer, 
+            Payload::Introduce
+        );
+
+
+    }
+   
     async fn search_name(&self, name: HashValue) -> Result< Route, HError>{
         
     }
 
 
     ///make a friend with the given node's name
-    async fn make_friend(&self, name: HashValue) -> Result<(), HErrror>{
+    async fn make_friend_(&self, name: HashValue) -> Result<(), HErrror>{
         //check if the given node is already a friend, if it is, return Ok(())
         if self.is_friend(name) {
             return Ok(());
@@ -65,6 +119,7 @@ pub trait Node {
 
 
 ///The reputaion of the node in the network.
+#[derive(Debug, Clone)]
 pub struct Reputation {
     ///node's reputation score, default is 0
     score: u8,
@@ -79,6 +134,7 @@ impl Reputation {
 
 /// The state of the node in the network. It is determined by the node itself.
 /// The Sleeping state is the initial state of the node.
+#[derive(Debug, Clone)]
 pub enum NodeState {
     ///node is active and free to communicate
     Active,

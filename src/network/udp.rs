@@ -1,4 +1,5 @@
 use tokio::net::{UdpSocket};
+use tokio::task::spawn;
 
 use crate::constants::{
     MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_RECV_PORT
@@ -33,7 +34,8 @@ pub trait UdpConnection {
 
     ///udp connection, send message to another node
     async fn udp_send_to(
-        &mut self, my_addr: String, 
+        &self, 
+        my_addr: String, 
         dst_addr: String, 
         msg: &Message,
         identity: & mut Identity,
@@ -53,16 +55,47 @@ pub trait UdpConnection {
         Ok(total_size)
         
     }
+
+    ///-------------------USE DIFFERENT PORTS FOR ADDRESS FILTERING-------------------
+    ///send message to all addresses of specified node to find the avaiable address of node we 
+    ///want to connect to. 
+    async fn filter_addr_list(
+        &self, 
+        my_addr: String, 
+        addr_list: Vec<String>, 
+        msg: &Message, 
+        identity: & mut Identity,
+    ) -> Result<(), HError> {
+
+        if addr_list.is_empty() {
+            return Err(HError::new("addr_list is empty"));
+        }
+        for addr in addr_list {
+            let mut id = identity.clone();
+            spawn(self.udp_send_to(my_addr.clone(), addr, msg, id));
+        }
+        Ok(())
+    }
+
+    async fn udp_recv_from_list(
+        &mut self, 
+        addr_list: Vec<String>,
+        buffer: &mut [u8]
+    ) -> Result<Vec<Message>, HError> {
+
+    }
 }
 
 
 mod tests {
     use super::*;
-
+    use crate::constants::ZERO_HASH;
+    use crate::network::protocol::Payload;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
-        let msg = Message::new_with_zero();
+        let msg = Message::new(
+            ZERO_HASH, ZERO_HASH, Payload::Empty);
         let save_msg = msg.clone();
         struct Test;
         

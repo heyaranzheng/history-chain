@@ -35,6 +35,7 @@ impl Header {
         Self { length, signature, public_key}
     }
 
+
     ///the size of the header in bytes.
     ///4 + 64 + 32 = 100.
     ///4: length, 64: signature, 32: public_key.
@@ -156,7 +157,7 @@ impl Header {
 
 
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
-pub enum MessageType
+pub enum Payload
 {
     ///request for history chain, with a timestamp bigger than the given one
     ChainRequest (RequestInfo),
@@ -167,6 +168,10 @@ pub enum MessageType
     BlockRecitify(BlockRec),
     ///serch friends, HashValue is the name of the node that want to search for friends.
     SearchFriend(HashValue),
+    ///empty, 
+    Empty,
+    ///introduce a friend to the network.
+    Introduce,
 }
 
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
@@ -176,7 +181,7 @@ pub struct RequestInfo {
 }
 
 
-unsafe impl Send for MessageType {}
+unsafe impl Send for Payload {}
 
 pub struct VoteBlockArgs {
     pub prev_hash: HashValue,
@@ -402,29 +407,38 @@ pub struct BlockRec {
 ///A message that can be sent between nodes in the network.
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct Message {
+    ///the header of the message
     ///the hash name of the sender node，the public key of the sender node.
-    pub sender: HashValue,
-    ///the signature of the message, the signature is the hash of the message.
-    pub signature: SignatureBytes,
+    pub sender: HashValue, 
     ///message's timestamp
     pub timestamp: u64,
     ///message's type 
-    pub message_type: MessageType,
+    pub payload: Payload,
     ///the hash name of the receiver node
     pub receiver: HashValue,
 }
 
 impl Message {
-    pub fn new_with_zero() -> Self{
+    pub fn new(sender: HashValue, receiver: HashValue, payload: Payload ) -> Self {
+        let timestamp = chrono::Utc::now().timestamp() as u64;
+        Self {
+            sender,
+            timestamp,
+            payload,
+            receiver,
+        }
+    }
+
+    fn new_with_zero() -> Self{
         Self {
             sender: ZERO_HASH,
             timestamp: 0,
-            message_type: 
-                MessageType::ChainRequest(RequestInfo{src_addr: "".to_string(), timestamp: 0}),
+            payload: 
+                Payload::Empty,
             receiver: ZERO_HASH,  
-            signature: [0u8; 64],
         }
     }
+
 
     ///decode the message from a slice, verify the signature of the message with provided header.
     ///Return the message if the signature is valid, otherwise return an error.
@@ -518,6 +532,7 @@ impl Message {
 
 }
 
+
 unsafe impl Send for Message {}
 
 
@@ -569,11 +584,13 @@ impl MessageHandler {
     }
 
     pub async fn handle(&self, msg: Message) -> Result<(), HError> {
-        match msg.message_type {
-            MessageType::BlockRecitify(_) => self.handle_block_recitify(msg),
-            MessageType::ChainRequest(_) => self.handle_chain_request(msg),
-            MessageType::VoteBlock(_) => self.handle_vote_block(msg),
-            MessageType::SearchFriend(_) => self.handle_search_friend(msg),
+        match msg.payload {
+            Payload::BlockRecitify(_) => self.handle_block_recitify(msg),
+            Payload::ChainRequest(_) => self.handle_chain_request(msg),
+            Payload::VoteBlock(_) => self.handle_vote_block(msg),
+            Payload::SearchFriend(_) => self.handle_search_friend(msg),
+            Payload::Introduce => Ok(()), //TO DO
+            Payload::Empty => Ok(()),
         }
     }
 

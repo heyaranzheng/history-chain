@@ -33,7 +33,7 @@ impl UdpConnection for NetworkHandler  {}
 
 mod tests {
     use super::*;
-    use crate::network::protocol::{Message, MessageType};
+    use crate::network::protocol::{Message, Payload};
     use crate::network::udp::UdpConnection;
 
 

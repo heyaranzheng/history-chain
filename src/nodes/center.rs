@@ -48,7 +48,8 @@ impl <B, D> CentralNode <B, D>
             timestamp,
             friends: HashMap::new(),
             executor: None,
-            reputation: Reputation ::new(),
+            //have a defaault reputation score with new method
+            reputation: Reputation::new(),
             state: NodeState::Active,
         }
     }
@@ -65,7 +66,7 @@ pub struct Nodebuilder<B, D>
     center_address: Option<String>,
     executor: Option<ChainExecutor<B, D>>,
     friends: Option<HashMap< NodeName, NomalNode<B, D>>>,
-    reputation: Reputation,
+    reputation: Option<Reputation>,
 }
 
 impl <B, D> Nodebuilder<B, D> 
@@ -78,7 +79,7 @@ impl <B, D> Nodebuilder<B, D>
             address: None,
             center_address: None,
             executor: None,
-            reputation: Reputation { score: 0 },
+            reputation: None,
             friends: None,
         }
     }
@@ -103,7 +104,7 @@ impl <B, D> Nodebuilder<B, D>
     }
 
     pub fn reputation(&mut self, reputation: Reputation) -> &mut Self {
-        self.reputation = reputation;
+        self.reputation = Some(reputation);
         self
     }
     pub fn friends (&mut self, friends: Option<HashMap< NodeName, NomalNode<B, D>>>) -> &mut Self {
@@ -143,8 +144,10 @@ impl <B, D> Nodebuilder<B, D>
         let mut center = 
             CentralNode::<B, D>::new(name, address);
         center.executor = self.executor;
-        center.reputation = self.reputation;
+        
+        //-----------------default value------
         center.state = NodeState::Active;
+        //reputation is still a default value.
 
         //if friends is Node, create a new HashMap<NodeName, NomalNode>
         if let Some(friends) = self.friends {
