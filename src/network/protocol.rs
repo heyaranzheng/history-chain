@@ -12,6 +12,7 @@ use crate::chain::{Chain, BlockChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
 use crate::network::identity::Identity;
+use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
 
@@ -531,6 +532,9 @@ impl Message {
     }
 
 }
+
+///we can easily send or receivea message over udp connection.
+impl UdpConnection for Message {}
 
 
 unsafe impl Send for Message {}

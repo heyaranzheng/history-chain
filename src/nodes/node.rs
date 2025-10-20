@@ -7,7 +7,9 @@ use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
-use crate::network::protocol::{Message, MessageType};
+use crate::network::protocol::{Message, Payload};
+
+
 
 ///Note:
 ///     Nodeinfo is not common way to describe a node in the network.
@@ -42,7 +44,7 @@ pub struct NodeInfo {
 
 
 #[async_trait]
-pub trait Node {       
+pub trait Node: UdpConnection {       
     ///get node's name
     fn name(&self) -> HashValue;
     ///get node's address
@@ -66,6 +68,35 @@ pub trait Node {
             None
         }
     }
+    
+    ///Default Implmentation:
+    ///a node can introduce some nodes to his friend, if his friend wants to make more friends
+    ///Those nodes which are introduced must have a good reputation (> 80) and active state.
+    async fn make_new(&self, introducer: NodeName) -> Result<Vec<NodeInfo>, HError>{
+        //check if the introducer is a friend
+        let info = self.get(introducer);
+        if info.is_none() {
+            return Err(HError::Message {message: "introducer is not your friend".to_string()});
+        }
+
+        //get the introducer's info
+        let introducer_info = info.unwrap();
+        let msg = Message::new(
+            self.name(), 
+            introducer_info.name, 
+            Payload::Introduce
+        );
+        //send the message to the introducer
+        let a = msg 
+        
+
+
+
+
+
+
+    }
+
     ///Default Implmentation:
     ///send a message to one of node's friend for introducing a new node
     async fn make_friend(&self, name: HashValue) -> Result<(), HError>{
@@ -75,22 +106,13 @@ pub trait Node {
         }
 
         let msg = Message::new(
-            self.name(), name, Payload::);
-    }
-
-
-    ///Default Implmentation:
-    ///a node can introduce some nodes to his friend, if his friend wants to make more friends
-    ///Those nodes which are introduced must have a good reputation (> 80) and active state.
-    async fn introduce(&self, introducer: NodeName) -> Result<Vec<NodeInfo>, HError>{
-        let msg = Message::new(
-            self.name(), 
-            introducer, 
-            Payload::Introduce
+            self.name(), name, Payload::Introduce
         );
 
-
+        Ok(())
     }
+
+
    
     async fn search_name(&self, name: HashValue) -> Result< Route, HError>{
         

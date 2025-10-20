@@ -8,7 +8,7 @@ use crate::executor::ChainExecutor;
 
 type NodeName = HashValue;
 
-pub struct NomalNode<B, D> 
+pub struct NormalNode<B, D> 
     where B: Block + Carrier,
           D: Block + Digester
 {
@@ -18,8 +18,8 @@ pub struct NomalNode<B, D>
     pub address: Option<String>,
     ///node's birthday
     pub timestamp: u64,
-    ///friend nodes, HashMap<name, NomalNode>
-    pub friends: HashMap< NodeName, NomalNode<B, D>>,
+    ///friend nodes, HashMap<name, NormalNode>
+    pub friends: HashMap< NodeName, NormalNode<B, D>>,
     pub center_address: Option<String>,
     ///chain's executor
     pub executor: Option<ChainExecutor<B, D>>,
@@ -29,7 +29,7 @@ pub struct NomalNode<B, D>
     pub state: NodeState,
 }
 
-impl <B, D> NomalNode <B, D>
+impl <B, D> NormalNode <B, D>
     where B: Block + Carrier,
           D: Block + Digester
 {
@@ -48,7 +48,7 @@ impl <B, D> NomalNode <B, D>
 }
  
 #[async_trait]
-impl <B, D> Node for NomalNode<B, D>
+impl <B, D> Node for NormalNode<B, D>
     where B: Block + Carrier,
           D: Block + Digester 
 {
