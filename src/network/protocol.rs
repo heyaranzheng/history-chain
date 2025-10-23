@@ -538,6 +538,7 @@ impl UdpConnection for Message {}
 
 
 unsafe impl Send for Message {}
+unsafe impl Sync for Message {}
 
 
 ///a handler for network messages.

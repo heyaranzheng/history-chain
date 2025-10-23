@@ -1,4 +1,6 @@
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, IpAddr, SocketAddr};
+use std::sync::Arc;
+use async_trait::async_trait;
 
 use tokio::net::{UdpSocket};
 use tokio::task::spawn;
@@ -11,7 +13,8 @@ use crate::network::identity::Identity;
 use crate::network::protocol::Message;
 use crate::network::protocol::Header;
 
-pub trait UdpConnection {
+#[async_trait]
+pub trait UdpConnection: Send + Sync {
     ///udp connection, receive message from all nodes, return message and source address
     ///
     async fn udp_recv_from(&self, bind_addr: SocketAddr) -> Result< (Message, String), HError> {
@@ -42,6 +45,7 @@ pub trait UdpConnection {
         msg: &Message,
         identity: & mut Identity,
     ) -> Result<usize, HError> 
+        where Self: Send + Sync
     
     {
         //encode message into buffer with a header
@@ -51,9 +55,8 @@ pub trait UdpConnection {
         let total_size = msg.encode_into_slice(identity, &mut uninit_buffer[..])? + header_size;
 
         //bind self address and udp port
-        let my_addr = SocketAddr::from(
-            format!("0.0.0.0:{}", UDP_CHECK_PORT)
-        );
+        let my_addr = 
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), UDP_CHECK_PORT);
         let udp_socket =UdpSocket::bind( my_addr).await?;
         //send data to dst_addr 
         let _ = udp_socket.send_to(&uninit_buffer[..total_size], dst_addr).await?;
@@ -68,30 +71,38 @@ pub trait UdpConnection {
     /// -----------------design a new way to a specified random check_port for a more accurate 
     /// checking process.
     async fn filter_addr_list(
-        &self, 
-        addr_list: Vec<SocketAddr>, 
+        self: Arc<Self>, 
+        addr_list: Arc<Vec<SocketAddr>>, 
         msg: &Message, 
         identity: & mut Identity,
-    ) -> Result<(), HError> {
+    ) -> Result<(), HError> 
+        where Self: Send + Sync
+    {
 
         if addr_list.is_empty() {
-            return Err(HError::new("addr_list is empty"));
+            return Err(HError::NetWork { message: format!("upd_connection error: have no addr_list") });
         }
 
         //create a recv task to receive message from check_port
         let mut buffer = [0u8; MAX_UDP_MSG_SIZE];
         let mut check_port_msg_list 
-            = self.udp_recv_from_check_port(&addr_list);
+            = self.udp_recv_from_check_port(addr_list.clone());
         
-      
-        for addr in addr_list {
+        for addr in &*addr_list {
+
             let mut id = identity.clone();
-            let check_addr = addr.clone().set_port(UDP_CHECK_PORT);
-            spawn(self.udp_send_to( addr,msg,  id));
+            let mut  check_addr = addr.clone();
+            let msg_clone = msg.clone();
+            check_addr.set_port(UDP_CHECK_PORT);
+            tokio::spawn(
+                self.clone().udp_send_to(check_addr , &msg_clone, &mut id)  
+            ).await;
         }
+        
         Ok(())
     
     }
+    
 
     ///udp connection, recive message from CHECK_PORT.
     /// 
@@ -99,7 +110,7 @@ pub trait UdpConnection {
     /// will be more accurate.
     async fn udp_recv_from_check_port(
         &self, 
-        addr_list: &Vec<SocketAddr>,
+        addr_list: Arc<Vec<SocketAddr>>,
     ) -> Result<SocketAddr, HError>  {
         let addr = SocketAddr::from(
             format!("0.0.0.0:{}", UDP_CHECK_PORT)

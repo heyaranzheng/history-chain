@@ -59,6 +59,9 @@ impl Identity {
 
 }
 
+unsafe impl Send for Identity {}
+unsafe impl Sync for Identity {}
+
 ///don't allow to clone the secret key
 impl Clone for Identity {
     fn clone(&self) -> Self {
