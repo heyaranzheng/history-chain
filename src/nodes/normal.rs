@@ -47,20 +47,3 @@ impl <B, D> NormalNode <B, D>
     }
 }
  
-#[async_trait]
-impl <B, D> Node for NormalNode<B, D>
-    where B: Block + Carrier,
-          D: Block + Digester 
-{
-    fn is_center(&self) -> bool {
-        false
-    }
-    #[inline]
-    fn my_address(&self) -> Option<String> {
-        self.address.clone()
-    }
-    #[inline]
-    fn my_name(&self) -> HashValue {
-        self.name
-    }
-}

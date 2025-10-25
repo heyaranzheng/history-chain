@@ -7,10 +7,13 @@ use crate::hash::{HashValue, Hasher};
 use crate::herrors::HError;
 use crate::nodes::node::{Node, NodeState, Reputation};
 use crate::executor::ChainExecutor;
-use crate::nodes::nomal::NomalNode;
+use crate::nodes::normal::NormalNode;
 
 type NodeName = HashValue;
 
+pub trait Central {
+
+}
 
 struct CentralNode <B, D> 
     where B: Block + Carrier,
@@ -23,7 +26,7 @@ struct CentralNode <B, D>
     ///node's birthday
     pub timestamp: u64,
     ///friend nodes, HashMap<name, NomalNode>
-    pub friends: HashMap< NodeName, NomalNode<B, D>>,
+    pub friends: HashMap< NodeName, NormalNode<B, D>>,
     ///chain's executor
     pub executor: Option<ChainExecutor<B, D>>,
     ///node's status
@@ -65,7 +68,7 @@ pub struct Nodebuilder<B, D>
     address: Option<String>,
     center_address: Option<String>,
     executor: Option<ChainExecutor<B, D>>,
-    friends: Option<HashMap< NodeName, NomalNode<B, D>>>,
+    friends: Option<HashMap< NodeName, NormalNode<B, D>>>,
     reputation: Option<Reputation>,
 }
 
@@ -107,7 +110,7 @@ impl <B, D> Nodebuilder<B, D>
         self.reputation = Some(reputation);
         self
     }
-    pub fn friends (&mut self, friends: Option<HashMap< NodeName, NomalNode<B, D>>>) -> &mut Self {
+    pub fn friends (&mut self, friends: Option<HashMap< NodeName, NormalNode<B, D>>>) -> &mut Self {
         self.friends = friends;
         self
         

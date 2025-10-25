@@ -1,4 +1,4 @@
 mod node;
 mod center;
-mod nomal;
+mod normal;
 pub use node::*;

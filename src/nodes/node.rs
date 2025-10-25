@@ -11,6 +11,7 @@ use crate::network::protocol::{Message, Payload};
 
 
 
+
 ///Note:
 ///     Nodeinfo is not common way to describe a node in the network.
 ///     It is needed if Node A wants to describe Node B, all the information in NodeInfo is 
@@ -44,7 +45,7 @@ pub struct NodeInfo {
 
 
 #[async_trait]
-pub trait Node: UdpConnection {       
+pub trait Node {       
     ///get node's name
     fn name(&self) -> HashValue;
     ///get node's address
@@ -87,7 +88,7 @@ pub trait Node: UdpConnection {
             Payload::Introduce
         );
         //send the message to the introducer
-        let a = msg 
+        
         
 
 
@@ -120,7 +121,7 @@ pub trait Node: UdpConnection {
 
 
     ///make a friend with the given node's name
-    async fn make_friend_(&self, name: HashValue) -> Result<(), HErrror>{
+    async fn make_friend_(&self, name: HashValue) -> Result<(), HError>{
         //check if the given node is already a friend, if it is, return Ok(())
         if self.is_friend(name) {
             return Ok(());

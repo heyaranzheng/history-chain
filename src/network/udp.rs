@@ -1,17 +1,18 @@
 use std::net::{Ipv4Addr, IpAddr, SocketAddr};
-use std::sync::Arc;
 use async_trait::async_trait;
+use futures::future::join_all;
 
 use tokio::net::{UdpSocket};
 use tokio::task::spawn;
+use tokio::time::timeout;
 
 use crate::constants::{
     MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_CHECK_PORT,
 };
 use crate::herrors::HError;
-use crate::network::identity::Identity;
-use crate::network::protocol::Message;
-use crate::network::protocol::Header;
+use crate::network::identity::{Identity};
+use crate::network::protocol::{Message, Payload, Header};
+use crate::hash::HashValue;
 
 #[async_trait]
 pub trait UdpConnection: Send + Sync {
@@ -64,66 +65,95 @@ pub trait UdpConnection: Send + Sync {
         
     }
 
-    ///-------------------USE DIFFERENT PORTS FOR ADDRESS FILTERING-------------------
-    ///send message to all addresses of specified node to find the avaiable address of node we 
-    ///want to connect to. 
-    /// 
-    /// -----------------design a new way to a specified random check_port for a more accurate 
-    /// checking process.
-    async fn filter_addr_list(
-        self: Arc<Self>, 
-        addr_list: Arc<Vec<SocketAddr>>, 
-        msg: &Message, 
-        identity: & mut Identity,
-    ) -> Result<(), HError> 
-        where Self: Send + Sync
-    {
+    ///an helper function for check_addresses_available, check if a addr is available
+    async fn check_addr_available(
+        addr: &SocketAddr, 
+        timeout_duration: std::time::Duration,
+        msg_byte: &[u8],
+    ) -> Result<SocketAddr, HError> {
+        //create a socket and send an message to dst_addr
+        match UdpSocket::bind("0.0.0.0:0").await {
+            Ok(udp_socket) => {
+                let result = timeout(timeout_duration, 
+                    //send data to dst_addr 
+                    udp_socket.send_to(msg_byte, addr)
+                ).await;
 
-        if addr_list.is_empty() {
-            return Err(HError::NetWork { message: format!("upd_connection error: have no addr_list") });
-        }
-
-        //create a recv task to receive message from check_port
-        let mut buffer = [0u8; MAX_UDP_MSG_SIZE];
-        let mut check_port_msg_list 
-            = self.udp_recv_from_check_port(addr_list.clone());
-        
-        for addr in &*addr_list {
-
-            let mut id = identity.clone();
-            let mut  check_addr = addr.clone();
-            let msg_clone = msg.clone();
-            check_addr.set_port(UDP_CHECK_PORT);
-            tokio::spawn(
-                self.clone().udp_send_to(check_addr , &msg_clone, &mut id)  
-            ).await;
-        }
-        
-        Ok(())
+                match result {
+                    Ok(_) => Ok(*addr),
+                    Err(_) => Err(
+                        HError::NetWork { 
+                            message: format!("check_addr_available:{} timeout", addr)
+                        }
+                    )
+                }
+            },
     
-    }
-    
-
-    ///udp connection, recive message from CHECK_PORT.
-    /// 
-    ///-----------If we can negotiate a random unused CHECK_PORT, not a global one, that 
-    /// will be more accurate.
-    async fn udp_recv_from_check_port(
-        &self, 
-        addr_list: Arc<Vec<SocketAddr>>,
-    ) -> Result<SocketAddr, HError>  {
-        let addr = SocketAddr::from(
-            format!("0.0.0.0:{}", UDP_CHECK_PORT)
-        );
-        //find the response from the check_port
-        loop {
-            let (msg, src_addr) = self.udp_recv_from(addr).await?;
-            if addr_list.contains(&src_addr) {
-                let src_addr = src_addr.parse::<SocketAddr>()?;
-                return Ok(src_addr)
+            Err(_) => { 
+                Err(
+                    HError::NetWork { 
+                        message: format!("check_addr_available:udp socket bind error for sending") 
+                    }
+                )
             }
         }
+        
     }
+   
+    async fn check_addresses_available(
+        &self,
+        addr_list: &Vec<SocketAddr>, 
+        timeout_ms: u64,
+        receiver: HashValue,
+        identity: & mut Identity,
+    ) -> Result< Vec<SocketAddr>, HError> 
+        where Self: Send + Sync
+    {
+        //check if the addr_list is empty.
+        if addr_list.is_empty() {
+            return Err(HError::NetWork { message: format!("upd_connection error: have no addr_list") });
+
+        }
+
+        //a buffer for encoded message
+        let mut buffer = vec![0u8; MAX_MSG_SIZE];
+
+        //time out duration, 1 second.
+        let timeout_duration = std::time::Duration::from_millis(timeout_ms);
+
+        //create a message and sign it with identity, encode it into a byte array.
+        let test_msg = Message::new(identity.public_key.to_bytes(), receiver, Payload::Empty);
+        let msg_len = test_msg.encode_into_slice(identity, &mut buffer[..])?;
+
+        let tasks = addr_list.iter().map(|addr| {
+            let buffer_clone = buffer.clone();
+            async move {
+                Self::check_addr_available(addr, timeout_duration, &buffer_clone[..msg_len]).await
+            }
+        });
+
+        //wait for all tasks to complete and collect the available addresses.
+        let results = join_all(tasks).await;
+        let addresses_available = results.iter().filter_map(
+            |result| {
+                match result {
+                    Ok(addr) => {
+                        Some(*addr)
+                    },
+                    Err(_) => {
+                        None
+                    }
+                }
+            }
+        ).collect();
+
+
+        Ok(addresses_available)
+    
+    }
+    
+
+   
 }
 
 
@@ -162,7 +192,11 @@ mod tests {
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();
         assert_eq!(save_msg, recv_msg);
         assert_eq!(src_addr, "127.0.0.1:8080"); 
-       
+         
+    }
+
+    fn test_filter_addr_list() {
+
     }
 
 }
