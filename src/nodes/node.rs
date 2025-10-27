@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use async_trait::async_trait;
 
 
@@ -7,7 +8,8 @@ use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
-use crate::network::protocol::{Message, Payload};
+use crate::network::{UdpConnection, Message, Payload};
+use crate::nodes::Identity;
 
 
 
@@ -24,7 +26,7 @@ pub struct NodeInfo {
     /// Node can have serveral usual addresses for connecting to the node,
     ///if we can't connect to the node by any of these addresses, we can try to connect to some 
     ///server to get the node's current address, if the node is in the network now.
-    address: Vec<String>,
+    address: Vec<SocketAddr>,
     ///the caller, if we can't use those addresses to connect to the node, we can ask the caller
     caller: NodeName,
     ///the node's reputation for this instance's owner, not for whole the network.
@@ -45,7 +47,7 @@ pub struct NodeInfo {
 
 
 #[async_trait]
-pub trait Node {       
+pub trait Node: UdpConnection{       
     ///get node's name
     fn name(&self) -> HashValue;
     ///get node's address
@@ -73,7 +75,7 @@ pub trait Node {
     ///Default Implmentation:
     ///a node can introduce some nodes to his friend, if his friend wants to make more friends
     ///Those nodes which are introduced must have a good reputation (> 80) and active state.
-    async fn make_new(&self, introducer: NodeName) -> Result<Vec<NodeInfo>, HError>{
+    async fn make_new(&self, introducer: NodeName, timeout_ms: u64, identity: &mut Identity) -> Result<Vec<NodeInfo>, HError>{
         //check if the introducer is a friend
         let info = self.get(introducer);
         if info.is_none() {
@@ -87,15 +89,15 @@ pub trait Node {
             introducer_info.name, 
             Payload::Introduce
         );
+
+        let dst_addr = introducer_info.address;
+
+        let avaliable_addr = Self::check_addresses_available(&dst_addr, timeout_ms, introducer, identity).await?;
         //send the message to the introducer
+        let result = 
+        Self::udp_send_to(avaliable_addr[0], &msg, identity).await?;
         
-        
-
-
-
-
-
-
+        Ok(Vec::new())
     }
 
     ///Default Implmentation:
@@ -113,9 +115,8 @@ pub trait Node {
         Ok(())
     }
 
-
    
-    async fn search_name(&self, name: HashValue) -> Result< Route, HError>{
+    async fn search_name(&self, name: HashValue) {
         
     }
 
@@ -129,7 +130,7 @@ pub trait Node {
         
         // can make them concurencey here!!!
         //get an intro list of node's name and its' address, between the two nodes,
-        //including the target node's name and its' address.
+        //including the   ddress.
         let intro_list= self.search_name(name).await?;
 
         //check the reputation of the introducer node, if it is good enough

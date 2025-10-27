@@ -11,7 +11,7 @@ use crate::constants::{MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, ZERO_HASH};
 use crate::chain::{Chain, BlockChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
-use crate::network::identity::Identity;
+use crate::nodes::Identity;
 use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
@@ -533,9 +533,6 @@ impl Message {
 
 }
 
-///we can easily send or receivea message over udp connection.
-impl UdpConnection for Message {}
-
 
 unsafe impl Send for Message {}
 unsafe impl Sync for Message {}
@@ -611,7 +608,7 @@ mod tests {
     fn test_decode_and_encode() {
         let msg = Message::new_with_zero();
 
-        use crate::network::identity::Identity;
+        use crate::nodes::Identity;
         let mut  iden = Identity::new();
 
         let size = 

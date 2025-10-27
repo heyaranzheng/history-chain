@@ -5,9 +5,10 @@ use chrono::Utc;
 use crate::block::{Block, BlockArgs, Carrier, Digester};
 use crate::hash::{HashValue, Hasher};
 use crate::herrors::HError;
-use crate::nodes::node::{Node, NodeState, Reputation};
+use crate::nodes::{Node, NodeState, Reputation};
 use crate::executor::ChainExecutor;
 use crate::nodes::normal::NormalNode;
+
 
 type NodeName = HashValue;
 

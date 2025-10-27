@@ -2,8 +2,8 @@ mod signal;
 mod tcp;
 mod udp;
 mod network;
-mod identity;
 mod router;
+mod protocol;
 
-pub mod protocol;
-
+pub use udp::UdpConnection;
+pub use protocol::*;

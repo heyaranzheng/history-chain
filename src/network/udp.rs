@@ -10,7 +10,7 @@ use crate::constants::{
     MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_CHECK_PORT,
 };
 use crate::herrors::HError;
-use crate::network::identity::{Identity};
+use crate::nodes::Identity;
 use crate::network::protocol::{Message, Payload, Header};
 use crate::hash::HashValue;
 
@@ -41,7 +41,6 @@ pub trait UdpConnection: Send + Sync {
 
     ///udp connection, send message to another node
     async fn udp_send_to(
-        &self, 
         dst_addr: SocketAddr, 
         msg: &Message,
         identity: & mut Identity,
@@ -101,7 +100,6 @@ pub trait UdpConnection: Send + Sync {
     }
    
     async fn check_addresses_available(
-        &self,
         addr_list: &Vec<SocketAddr>, 
         timeout_ms: u64,
         receiver: HashValue,
@@ -112,7 +110,6 @@ pub trait UdpConnection: Send + Sync {
         //check if the addr_list is empty.
         if addr_list.is_empty() {
             return Err(HError::NetWork { message: format!("upd_connection error: have no addr_list") });
-
         }
 
         //a buffer for encoded message
@@ -122,9 +119,10 @@ pub trait UdpConnection: Send + Sync {
         let timeout_duration = std::time::Duration::from_millis(timeout_ms);
 
         //create a message and sign it with identity, encode it into a byte array.
-        let test_msg = Message::new(identity.public_key.to_bytes(), receiver, Payload::Empty);
+        let test_msg = Message::new(identity.public_key_to_bytes(), receiver, Payload::Empty);
         let msg_len = test_msg.encode_into_slice(identity, &mut buffer[..])?;
 
+        //create tasks to check if each address is available 
         let tasks = addr_list.iter().map(|addr| {
             let buffer_clone = buffer.clone();
             async move {
@@ -147,9 +145,7 @@ pub trait UdpConnection: Send + Sync {
             }
         ).collect();
 
-
         Ok(addresses_available)
-    
     }
     
 
@@ -171,10 +167,13 @@ mod tests {
         
         impl UdpConnection for Test {}
         let mut test = Test;
-        let dst_addr = "127.0.0.1:8081".to_string();
+        let dst_addr = SocketAddr::new(
+            std::net::Ipv4Addr::new(127, 0, 0, 1).into(), 
+            8081
+        );
         let send_task = async move {
             let src_addr = format!("127.0.0.1:8080").to_string();
-            test.udp_send_to( dst_addr, &msg, &mut Identity::new()).await.unwrap();
+            Test::udp_send_to( dst_addr, &msg, &mut Identity::new()).await.unwrap();
         };
 
         let mut test = Test;
