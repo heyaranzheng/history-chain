@@ -17,16 +17,39 @@ use crate::hash::HashValue;
 #[async_trait]
 pub trait UdpConnection: Send + Sync {
     ///udp connection, receive message from all nodes, return message and source address
-    ///
-    async fn udp_recv_from(&self, bind_addr: SocketAddr) -> Result< (Message, String), HError> {
+    ///if timeout, return error
+    async fn udp_recv_from(
+        timeout_ms: u64,
+        bind_addr: SocketAddr, 
+    ) -> Result< (Message, SocketAddr), HError> 
+    {
         let mut uninit_buffer = Vec::with_capacity(MAX_UDP_MSG_SIZE);
         unsafe { uninit_buffer.set_len(MAX_UDP_MSG_SIZE) };
 
         //bind to udp port for any address
         let udp_socket = UdpSocket::bind(bind_addr).await?;
-        //receive data from udp socket
-        let (size, src_addr) = udp_socket.recv_from(&mut uninit_buffer).await?;
-        let src_addr_str = format!("{}:{}", src_addr.ip(), src_addr.port());
+
+        //create a task to receive data from udp socket.
+        let timeout_duration = std::time::Duration::from_millis(timeout_ms);
+        let (size, src_addr);
+        let result = 
+            timeout(timeout_duration, udp_socket.recv_from(&mut uninit_buffer)).await;
+        match result {
+            Err(_) => {
+                return Err(HError::NetWork { message: format!("udp_recv_from: timeout") });
+            }
+            Ok(result) => {
+                match result {
+                    Ok(result) => {
+                        size = result.0;
+                        src_addr = result.1;
+                    },
+                    Err(_) => {
+                        return Err(HError::NetWork { message: format!("udp_recv_from: failed") });
+                    }
+                }
+            }
+        }
         
         //get header from the buffer
         let header_size = Header::header_size();
@@ -36,8 +59,9 @@ pub trait UdpConnection: Send + Sync {
         let msg = 
             Message::decode_from_slice(&uninit_buffer[header_size..size], & header)?;
 
-        Ok((msg, src_addr_str))
+        Ok((msg, src_addr))
     }
+
 
     ///udp connection, send message to another node
     async fn udp_send_to(
@@ -181,8 +205,12 @@ mod tests {
         //crate a mpsc to send and recv message
         use tokio::sync::mpsc;
         let (sender, mut receiver) = mpsc::channel(1);
+        let bind_addr = SocketAddr::new(
+            std::net::Ipv4Addr::new(127, 0, 0, 1).into(), 
+            8080
+        );
         let recv_task = async move {
-            let (msg, src_addr) = test.udp_recv_from("127.0.0.1:8080".parse().unwrap()).await.unwrap();
+            let (msg, src_addr) = Test::udp_recv_from(110,bind_addr).await.unwrap();
             sender.send( (msg, src_addr)).await.unwrap();
         };
         //if we sync the code below, we should use recv_task first, then send_task, 
@@ -190,7 +218,7 @@ mod tests {
         tokio::spawn(recv_task);
         let (recv_msg, src_addr) = receiver.recv().await.unwrap();
         assert_eq!(save_msg, recv_msg);
-        assert_eq!(src_addr, "127.0.0.1:8080"); 
+        assert_eq!(src_addr, bind_addr); 
          
     }
 

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{SocketAddr, Ipv4Addr};
 use async_trait::async_trait;
+use bincode::{Decode, Encode};
 
 
 use crate::block::{Block, Carrier, Digester};
@@ -10,6 +11,7 @@ use crate::hash:: HashValue;
 use crate::herrors::HError;
 use crate::network::{UdpConnection, Message, Payload};
 use crate::nodes::Identity;
+use crate::constants::UDP_RECV_PORT;
 
 
 
@@ -20,7 +22,7 @@ use crate::nodes::Identity;
 /// for Node A, not for other nodes. 
 ///     Namely, the NodeInfo of Node B for Node A ONLY presents the perspectives of Node A to 
 /// Node B, not the whole network's perspective.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Decode, Encode)]
 pub struct NodeInfo {
     name: HashValue,
     /// Node can have serveral usual addresses for connecting to the node,
@@ -51,7 +53,7 @@ pub trait Node: UdpConnection{
     ///get node's name
     fn name(&self) -> HashValue;
     ///get node's address
-    fn address(&self) -> String;
+    fn address(&self) -> SocketAddr;
     ///get node's friends
     fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
     
@@ -75,7 +77,11 @@ pub trait Node: UdpConnection{
     ///Default Implmentation:
     ///a node can introduce some nodes to his friend, if his friend wants to make more friends
     ///Those nodes which are introduced must have a good reputation (> 80) and active state.
-    async fn make_new(&self, introducer: NodeName, timeout_ms: u64, identity: &mut Identity) -> Result<Vec<NodeInfo>, HError>{
+    async fn make_new(
+        &self, introducer: NodeName, 
+        timeout_ms: u64, 
+        identity: &mut Identity
+    ) -> Result<NodeInfo, HError>{
         //check if the introducer is a friend
         let info = self.get(introducer);
         if info.is_none() {
@@ -90,14 +96,33 @@ pub trait Node: UdpConnection{
             Payload::Introduce
         );
 
+        //filter out the avaliable addresses of the introducer
         let dst_addr = introducer_info.address;
+        let avaliable_addr = 
+            Self::check_addresses_available(&dst_addr, timeout_ms, introducer, identity).await?;
+        if avaliable_addr.is_empty() {
+            return Err(HError::Message {message: "no avaliable address".to_string()});
+        }
 
-        let avaliable_addr = Self::check_addresses_available(&dst_addr, timeout_ms, introducer, identity).await?;
-        //send the message to the introducer
-        let result = 
-        Self::udp_send_to(avaliable_addr[0], &msg, identity).await?;
+        //send the message to the introducer，then wait for the response
+        let _ = Self::udp_send_to(avaliable_addr[0], &msg, identity).await?;
+
+        //bind a temporary ip to receive the response
+        let bind_addr = SocketAddr::new(
+            Ipv4Addr::new(0, 0, 0, 0).into(), UDP_RECV_PORT
+        );
+        let (msg, _) = Self::udp_recv_from( timeout_ms, bind_addr).await?;
+
+        //get out the node's info from the response
+        let payload = msg.payload;
+        if let Payload::IntroduceResp(new_node_info) = payload {
+            Ok(new_node_info)
+        }else {
+            Err(HError::Message {
+                message: "introduce response for a new node is not valid".to_string()
+            })
+        }
         
-        Ok(Vec::new())
     }
 
     ///Default Implmentation:
@@ -123,17 +148,7 @@ pub trait Node: UdpConnection{
 
     ///make a friend with the given node's name
     async fn make_friend_(&self, name: HashValue) -> Result<(), HError>{
-        //check if the given node is already a friend, if it is, return Ok(())
-        if self.is_friend(name) {
-            return Ok(());
-        }
-        
-        // can make them concurencey here!!!
-        //get an intro list of node's name and its' address, between the two nodes,
-        //including the   ddress.
-        let intro_list= self.search_name(name).await?;
 
-        //check the reputation of the introducer node, if it is good enough
         Ok(())
 
 
@@ -143,7 +158,7 @@ pub trait Node: UdpConnection{
 
 
 ///The reputaion of the node in the network.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Decode, Encode)]
 pub struct Reputation {
     ///node's reputation score, default is 0
     score: u8,
@@ -158,7 +173,7 @@ impl Reputation {
 
 /// The state of the node in the network. It is determined by the node itself.
 /// The Sleeping state is the initial state of the node.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Decode, Encode)]
 pub enum NodeState {
     ///node is active and free to communicate
     Active,
@@ -175,7 +190,6 @@ type NodeName = HashValue;
 
 mod tests {
     use super::*;
-    use crate::network::protocol::MessageType;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {

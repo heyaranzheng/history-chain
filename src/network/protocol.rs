@@ -11,7 +11,7 @@ use crate::constants::{MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, ZERO_HASH};
 use crate::chain::{Chain, BlockChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
-use crate::nodes::Identity;
+use crate::nodes::{Identity, NodeInfo};
 use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
@@ -173,6 +173,8 @@ pub enum Payload
     Empty,
     ///introduce a friend to the network.
     Introduce,
+    ///the responce of Introduce message,
+    IntroduceResp(NodeInfo),
 }
 
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
@@ -586,6 +588,8 @@ impl MessageHandler {
     }
 
     pub async fn handle(&self, msg: Message) -> Result<(), HError> {
+        //---------------------------------------------------------
+        //NEED TO ADD A FUNCTION HERE TO HANDLE THE MESSAGE.
         match msg.payload {
             Payload::BlockRecitify(_) => self.handle_block_recitify(msg),
             Payload::ChainRequest(_) => self.handle_chain_request(msg),
@@ -593,6 +597,7 @@ impl MessageHandler {
             Payload::SearchFriend(_) => self.handle_search_friend(msg),
             Payload::Introduce => Ok(()), //TO DO
             Payload::Empty => Ok(()),
+            Payload::IntroduceResp(_) => Ok(()),
         }
     }
 
