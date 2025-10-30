@@ -7,7 +7,7 @@ use tokio::task::spawn;
 use tokio::time::timeout;
 
 use crate::constants::{
-    MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_CHECK_PORT,
+    MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_CHECK_PORT, ZERO_HASH,
 };
 use crate::herrors::HError;
 use crate::nodes::Identity;
@@ -50,14 +50,10 @@ pub trait UdpConnection: Send + Sync {
                 }
             }
         }
-        
-        //get header from the buffer
-        let header_size = Header::header_size();
-        let header = Header::decode_from_slice(&uninit_buffer[..header_size])?;
 
         //decode message from buffer with header
-        let msg = 
-            Message::decode_from_slice(&uninit_buffer[header_size..size], & header)?;
+        let msg =
+            Message::decode_from_slice(&uninit_buffer[..size])?;
 
         Ok((msg, src_addr))
     }
@@ -94,32 +90,31 @@ pub trait UdpConnection: Send + Sync {
         timeout_duration: std::time::Duration,
         msg_byte: &[u8],
     ) -> Result<SocketAddr, HError> {
+        let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
         //create a socket and send an message to dst_addr
-        match UdpSocket::bind("0.0.0.0:0").await {
-            Ok(udp_socket) => {
-                let result = timeout(timeout_duration, 
-                    //send data to dst_addr 
-                    udp_socket.send_to(msg_byte, addr)
-                ).await;
+        let bind_addr = format!("0.0.0.0:{}",UDP_CHECK_PORT);
+        let udp_socket =UdpSocket::bind(bind_addr).await?;
+        udp_socket.send_to(msg_byte, addr).await?;
+ 
 
-                match result {
-                    Ok(_) => Ok(*addr),
-                    Err(_) => Err(
-                        HError::NetWork { 
-                            message: format!("check_addr_available:{} timeout", addr)
-                        }
-                    )
-                }
-            },
-    
-            Err(_) => { 
-                Err(
-                    HError::NetWork { 
-                        message: format!("check_addr_available:udp socket bind error for sending") 
-                    }
-                )
-            }
+        //waiting for response from dst_addr
+        let (size, dst_addr) = 
+            timeout(timeout_duration, udp_socket.recv_from(&mut buffer[..]))
+            .await
+            .map_err(
+               |e| HError::NetWork { message: format!("check_addr_available: timeout: {}", e) }
+            )??;
+        //check the address is the same as dst_addr
+        if dst_addr.ip() != addr.ip() {
+            return Err(HError::NetWork { message: format!("check_addr_available: failed") });
         }
+
+        //check the message
+        let msg = Message::decode_from_slice(&buffer[..size])?;
+        if msg.payload != Payload::Empty { 
+            return Err(HError::NetWork { message: format!("check_addr_available: failed") });
+        }
+        Ok(*addr)
         
     }
    
@@ -176,11 +171,15 @@ pub trait UdpConnection: Send + Sync {
    
 }
 
-
+//----------------------------------test not good
 mod tests {
+    use tokio::time::timeout;
     use super::*;
-    use crate::constants::ZERO_HASH;
-    use crate::network::protocol::Payload;
+    use crate::constants::{ZERO_HASH, MAX_UDP_MSG_SIZE};
+    use crate::network::{Message, Payload};
+    use crate::nodes::Identity;
+    
+
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
@@ -222,7 +221,77 @@ mod tests {
          
     }
 
-    fn test_filter_addr_list() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn check_addr_available_test() -> Result<(), HError> { 
+        struct Test;
+        impl UdpConnection for Test {}
+
+        //create a notifier to tell the listener is ready
+        let (tx,  rx) = tokio::sync::oneshot::channel();
+        let timeout_duration = std::time::Duration::from_millis(3000);
+     
+        //create a udp listener
+        let task  = async move {
+            
+            let socket = UdpSocket::bind("127.0.0.1:8080").await.unwrap();
+            tx.send(true).unwrap();
+            let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+        
+            let mut id = Identity::new();
+            let looper_task = async {
+                loop {
+                    let (_, src_addr) = socket.recv_from(&mut buffer[..]).await.unwrap();
+                    let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+                    let mut listener_buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+                   
+                    msg.encode_into_slice(&mut id, &mut listener_buffer[..]).unwrap();
+                    socket.send_to(&listener_buffer[..], src_addr).await.unwrap();
+                }
+            };
+            match timeout(timeout_duration, looper_task).await {
+                Ok(_) => {
+                    Ok(())
+                },
+                Err(_) => {
+                    Err(HError::NetWork { message: "check addr available timeout".to_string() })
+                }
+            }
+
+        };
+
+        //spawn the listener task
+        tokio::spawn(task);
+
+        rx.await.unwrap();
+
+        //set addr to 127.0.0.1:8080
+        let ip = Ipv4Addr::new(127, 0, 0, 1);
+        let valid_port = 8080;
+        let valid_addr = SocketAddr::new(ip.into(), valid_port);
+        let invalid_ip = Ipv4Addr::new(127, 0, 0, 2);
+        let invalid_port = 9999;
+        let invalid_addr = SocketAddr::new(invalid_ip.into(), invalid_port);
+
+       
+
+        //create a msg to send
+        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+        let mut id = Identity::new();
+        let mut msg_bytes = vec![0u8; MAX_UDP_MSG_SIZE];
+        msg.encode_into_slice(&mut id,&mut  msg_bytes)?;
+
+    
+        let result_valid = 
+            Test::check_addr_available(
+                &valid_addr, timeout_duration, &msg_bytes[..]
+            ).await;
+        assert_eq!(result_valid.is_ok(), true);
+        let result_invalid = 
+            Test::check_addr_available(
+                &invalid_addr, timeout_duration, &msg_bytes[..]
+            ).await;
+        assert_eq!(result_invalid.is_ok(), false);
+        Ok(())
 
     }
 

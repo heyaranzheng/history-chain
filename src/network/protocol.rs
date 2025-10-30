@@ -67,24 +67,24 @@ impl Header {
             bincode::encode_into_slice(self.length, &mut buffer[..4], config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
         total_size += size;
-        println!("size: {:?}", size);
+        println!("debug print-> header.length size: {:?}", size);
         let size = 
             bincode::encode_into_slice(self.signature,&mut  buffer[4..68], config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
         total_size += size;
-        println!("size: {:?}", size);
+        println!("debug print-> header.signature size: {:?}", size);
         let size =
             bincode::encode_into_slice(self.public_key, &mut buffer[68..100], config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
         total_size += size;
-        println!("size: {:?}", size);
+        println!("debug print-> header.public_key size: {:?}", size);
         
         Ok(total_size)
     }
 
     
-    //decode the header from a slice
-    pub fn decode_from_slice  (data: &[u8]) -> Result<Header, HError> 
+    // decode the header from a slice
+    fn decode_from_slice  (data: &[u8]) -> Result<Header, HError> 
     {
         //create a config for bincode, with big-endian, and a fixed int encoding.
         let config = bincode::config::standard()
@@ -108,6 +108,7 @@ impl Header {
         Ok(header)
     }
 
+
     //extract the header from the stream
     pub async fn from_stream <T> ( stream: &mut T) -> Result<Header, HError> 
         where T: AsyncReadExt + Unpin,
@@ -129,7 +130,7 @@ impl Header {
 
         //encode the header to a vec
         let size = self.encode_into_slice(&mut header_enc[..])?;
-        
+
         //write the header to the stream
         stream.write_all(&header_enc[..size]).await?;
      
@@ -442,10 +443,10 @@ impl Message {
         }
     }
 
-
+    ///a helper function to create a message from a buffer with a specific header.
     ///decode the message from a slice, verify the signature of the message with provided header.
     ///Return the message if the signature is valid, otherwise return an error.
-    pub fn decode_from_slice(slice: &[u8], header: &Header) 
+    fn decode_from_slice_with_header(slice: &[u8], header: &Header) 
     -> Result<Self, HError> {
         //verify the signature of the message
         match header.verify_header(slice) {
@@ -462,6 +463,27 @@ impl Message {
             }
         }
     }
+    
+    ///get the message from an bytes slice
+    pub fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
+        //get the header from the slice
+        let header = Header::decode_from_slice(&slice[..Header::header_size()])?;
+
+        //get the encoded message from the slice
+        let msg_byte_size = header.length as usize;
+        //check the size of the message
+        if slice.len() < msg_byte_size + Header::header_size() {
+            return Err(HError::Message { message: "message size is too small".to_string() });
+        }
+        //decode the message from the slice
+        let msg = 
+            Self::decode_from_slice_with_header(
+                &slice[Header::header_size()..msg_byte_size + Header::header_size()], 
+                &header)?;
+        Ok(msg)
+    }
+
+
 
     ///encode the message into a slice, signate the message, and add a header at the head of the slice.
     ///slice's size is MAX_MSG_SIZE.
@@ -529,7 +551,7 @@ impl Message {
         stream.read_exact(&mut uninit_buf[..]).await?;
 
         //decode the message from the buffer
-        let msg =Message::decode_from_slice(&uninit_buf[..], &header)?;
+        let msg =Message::decode_from_slice_with_header(&uninit_buf[..], &header)?;
         Ok(msg)
     }
 
@@ -621,7 +643,7 @@ mod tests {
         let header = 
             Header::decode_from_slice(&[0u8; MAX_MSG_SIZE][..100]).unwrap();
         let msg_ret = 
-            Message::decode_from_slice(&[0u8; MAX_MSG_SIZE][100..size], &header ).unwrap();
+            Message::decode_from_slice_with_header(&[0u8; MAX_MSG_SIZE][100..size], &header ).unwrap();
 
         assert_eq!(msg, msg_ret);
     }
