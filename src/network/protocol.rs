@@ -25,15 +25,15 @@ type SignatureBytes = [u8; 64];
 #[derive(Debug, Decode, Encode, PartialEq)]
 pub struct Header {
     //the total size of the data we will get from the stream. 4 bytes.
-    length: u32,
+    msg_length: u32,
     //the signature of the data, 64 bytes.
     signature: SignatureBytes,
     //public key of the sender, 32 bytes.
     public_key: HashValue,
 }
 impl Header {
-    fn new(length: u32, signature: SignatureBytes, public_key: HashValue) -> Self {
-        Self { length, signature, public_key}
+    fn new(msg_length: u32, signature: SignatureBytes, public_key: HashValue) -> Self {
+        Self { msg_length, signature, public_key}
     }
 
 
@@ -64,10 +64,10 @@ impl Header {
         //encode the header 
         
         let size = 
-            bincode::encode_into_slice(self.length, &mut buffer[..4], config)
+            bincode::encode_into_slice(self.msg_length, &mut buffer[..4], config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
         total_size += size;
-        println!("debug print-> header.length size: {:?}", size);
+        println!("debug print-> header.msg_length size: {:?}", size);
         let size = 
             bincode::encode_into_slice(self.signature,&mut  buffer[4..68], config)
             .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
@@ -466,19 +466,26 @@ impl Message {
     
     ///get the message from an bytes slice
     pub fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
+        let header_size = Header::header_size();
+        //check the size of the slice
+        if slice.len() < header_size {
+            return Err(HError::Message { message: "header size is too small, it can't be valid".to_string() });
+        }
+        
         //get the header from the slice
-        let header = Header::decode_from_slice(&slice[..Header::header_size()])?;
+        let header = Header::decode_from_slice(&slice[..header_size])?;
 
         //get the encoded message from the slice
-        let msg_byte_size = header.length as usize;
+        let msg_byte_size = header.msg_length as usize;
         //check the size of the message
-        if slice.len() < msg_byte_size + Header::header_size() {
-            return Err(HError::Message { message: "message size is too small".to_string() });
+        if slice.len() < msg_byte_size + header_size {
+            return Err(HError::Message { message: "message size is too small, it can't be valid".to_string() });
         }
-        //decode the message from the slice
+    
+        let end_index = header_size + msg_byte_size;
         let msg = 
             Self::decode_from_slice_with_header(
-                &slice[Header::header_size()..msg_byte_size + Header::header_size()], 
+                &slice[header_size..end_index], 
                 &header)?;
         Ok(msg)
     }
@@ -515,7 +522,7 @@ impl Message {
         //sign the message
         let signature = identity.sign_msg(&buffer[100..total_size]).unwrap();
         //add the header to the buffer
-        let header = Header::new(total_size as u32, signature,
+        let header = Header::new(size as u32, signature,
              identity.public_key_to_bytes());
         let _ = header.encode_into_slice(&mut buffer[..100])?;
         Ok(size)
@@ -543,7 +550,7 @@ impl Message {
         let header = Header::from_stream(stream).await?;
 
         //get the encoded message from the stream
-        let msg_byte_size = header.length as usize;
+        let msg_byte_size = header.msg_length as usize;
         let mut uninit_buf = Vec::with_capacity(msg_byte_size);
         unsafe {
             uninit_buf.set_len(msg_byte_size);
@@ -629,48 +636,99 @@ impl MessageHandler {
 mod tests {
     use tokio::io::AsyncSeekExt;
 
+    use crate::network::signal;
+    use bincode::{Decode, Encode};
+
     use super::*;
 
     #[test]
-    fn test_decode_and_encode() {
-        let msg = Message::new_with_zero();
+    fn test_header_encode_and_decode() {
+        //create a byte message
+        let msg = b"hello world";
+        
+        //create a header, sign the message with the identity, then encode the header into the silice
+        let mut  id = Identity::new();
+        let signature = id.sign_msg(msg).unwrap();
+        let public_key = id.public_key_to_bytes();
+        let header = Header::new(msg.len() as u32, signature, public_key);
+        let mut buffer = [0u8; 100];
+        let header_bytes = header.encode_into_slice(&mut buffer[..]);
 
-        use crate::nodes::Identity;
-        let mut  iden = Identity::new();
+        assert_eq!(header_bytes.is_ok(), true);
+        
+        //encode the header from the slice
+        let header_ret = Header::decode_from_slice(&buffer[..]);
+        
+        assert_eq!(header_ret.is_ok(), true);
 
-        let size = 
-            msg.encode_into_slice(&mut iden, &mut [0u8; MAX_MSG_SIZE]).unwrap();
-        let header = 
-            Header::decode_from_slice(&[0u8; MAX_MSG_SIZE][..100]).unwrap();
-        let msg_ret = 
-            Message::decode_from_slice_with_header(&[0u8; MAX_MSG_SIZE][100..size], &header ).unwrap();
+        //verify the msg with the header
+        let verify_ret = header.verify_header(msg);
+        assert_eq!(verify_ret.is_ok(), true);
 
-        assert_eq!(msg, msg_ret);
     }
+
+
+    ///test the 
     #[tokio::test]
-    async fn test_header() {
+    async fn test_header_with_stream() {
         let header = Header::new(10, [2u8; 64], [1u8; 32]);
 
-        let buffer = [0u8; 10000];
-        
-        use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncRead, AsyncWrite};
-        use tokio::fs::{File, OpenOptions};
-
+        //create a file
+        use tokio::fs::{OpenOptions};
         let mut stream = OpenOptions::new()
             .read(true)
-           .write(true)
-           .create(true)
-           .open("test.bin")
+            .write(true)
+            .create(true)
+            .open("test.bin")
             .await
             .unwrap();
 
+        //write the header to the file
         header.into_stream(&mut stream).await.unwrap();
 
+        //read the header from the file
         stream.seek(std::io::SeekFrom::Start(0)).await.unwrap();
         let ret_header = Header::from_stream(&mut stream).await.unwrap();
+
         assert_eq!(header, ret_header);
 
+        //clean up the garbage file.
         tokio::fs::remove_file("test.bin").await.unwrap();
-
     }
+
+    #[test]
+    fn test_decode_with_header() {
+        //create a byte message
+        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+
+
+        let mut buffer = vec![0u8; 10240];
+        let mut  id = Identity::new();
+        let  msg_bytes_size = msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+
+        let header = Header::decode_from_slice(&buffer[..]).unwrap();
+        let end_index = 100 + msg_bytes_size;
+        let msg_ret = Message::decode_from_slice_with_header(&buffer[100..end_index], &header).unwrap();
+
+        assert_eq!(msg, msg_ret);
+    }
+
+    ///test the encode and decode of message and header (header's decode was dealing 
+    /// in the functions of message)
+    #[test]
+    fn test_decode_and_encode() {
+        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+        //let msg = Message::new_with_zero();
+
+        use crate::nodes::Identity;
+        let mut  id = Identity::new();
+
+        let mut buffer = vec![0u8; 10240];
+        msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+
+        let msg_ret = Message::decode_from_slice(&buffer[..]);
+    
+        assert_eq!(msg, msg_ret.unwrap());
+    }
+
 }

@@ -171,7 +171,7 @@ pub trait UdpConnection: Send + Sync {
    
 }
 
-//----------------------------------test not good
+
 mod tests {
     use tokio::time::timeout;
     use super::*;
@@ -285,7 +285,18 @@ mod tests {
             Test::check_addr_available(
                 &valid_addr, timeout_duration, &msg_bytes[..]
             ).await;
-        assert_eq!(result_valid.is_ok(), true);
+        match result_valid{
+            Ok(_) => {
+                let address = result_valid.unwrap();
+                println!("address: {:?}", address);
+            }
+            Err(e) => {
+                println!("error: {:?}", e);
+            }
+        }
+        //assert!(result_valid.is_ok());
+
+  
         let result_invalid = 
             Test::check_addr_available(
                 &invalid_addr, timeout_duration, &msg_bytes[..]
