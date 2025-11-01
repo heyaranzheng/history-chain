@@ -446,7 +446,7 @@ impl Message {
     ///a helper function to create a message from a buffer with a specific header.
     ///decode the message from a slice, verify the signature of the message with provided header.
     ///Return the message if the signature is valid, otherwise return an error.
-    fn decode_from_slice_with_header(slice: &[u8], header: &Header) 
+    fn decode_from_slice_with_header(my_name: &HashValue, slice: &[u8], header: &Header) 
     -> Result<Self, HError> {
         //verify the signature of the message
         match header.verify_header(slice) {
@@ -456,7 +456,26 @@ impl Message {
                 //decode the slice to a message
                 let (msg, _): ( Self, _) = bincode::decode_from_slice(slice, config)
                     .map_err(|_| HError::Message { message: "decode error in message".to_string() })?;
+
+                //verify if the sender's name in message is equal to the public key in header
+                if msg.sender != header.public_key {
+                    return Err(HError::Message {
+                        message: "sender's name in message is not equal to the 
+                            sender's name in header, this message is not valid".to_string(),
+                    });
+                }
+
+                //verify if the receiver's name in message is equal to the name of the node.
+                if msg.receiver != *my_name  {
+                    return Err(HError::Message {
+                        message: "receiver's name in message is not equal to the 
+                            name of the node, it means the message is not for this node".to_string(),
+                    });
+                }
+
                 Ok(msg)
+
+
             }
             Err(e) => {
                 Err(HError::Message { message: format!("verify error in message: {}", e) })
@@ -465,7 +484,7 @@ impl Message {
     }
     
     ///get the message from an bytes slice
-    pub fn decode_from_slice(slice: &[u8]) -> Result<Self, HError> {
+    pub fn decode_from_slice(my_name: &HashValue, slice: &[u8]) -> Result<Self, HError> {
         let header_size = Header::header_size();
         //check the size of the slice
         if slice.len() < header_size {
@@ -485,6 +504,7 @@ impl Message {
         let end_index = header_size + msg_byte_size;
         let msg = 
             Self::decode_from_slice_with_header(
+                my_name,
                 &slice[header_size..end_index], 
                 &header)?;
         Ok(msg)
@@ -543,7 +563,7 @@ impl Message {
         Ok(())
     }
     
-    async fn from_stream <S>  (stream: &mut S) -> Result<Message, HError> 
+    async fn from_stream <S>  (my_name: &HashValue, stream: &mut S) -> Result<Message, HError> 
         where S: tokio::io::AsyncRead + Unpin,
     {
         //get the header from the stream
@@ -558,7 +578,7 @@ impl Message {
         stream.read_exact(&mut uninit_buf[..]).await?;
 
         //decode the message from the buffer
-        let msg =Message::decode_from_slice_with_header(&uninit_buf[..], &header)?;
+        let msg =Message::decode_from_slice_with_header(my_name, &uninit_buf[..], &header)?;
         Ok(msg)
     }
 
@@ -698,17 +718,25 @@ mod tests {
 
     #[test]
     fn test_decode_with_header() {
+        let mut encode_id = Identity::new();
+        let decode_id = Identity::new();
+        let decoder_name = decode_id.public_key_to_bytes();
         //create a byte message
-        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+        let msg = 
+            Message::new(encode_id.public_key_to_bytes(),  
+                    decoder_name, 
+                    Payload::Empty
+            );
 
 
         let mut buffer = vec![0u8; 10240];
-        let mut  id = Identity::new();
-        let  msg_bytes_size = msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+        let  msg_bytes_size = msg.encode_into_slice(&mut encode_id, &mut buffer[..]).unwrap();
 
         let header = Header::decode_from_slice(&buffer[..]).unwrap();
         let end_index = 100 + msg_bytes_size;
-        let msg_ret = Message::decode_from_slice_with_header(&buffer[100..end_index], &header).unwrap();
+        let msg_ret = Message::decode_from_slice_with_header(
+            &decoder_name,
+            &buffer[100..end_index], &header).unwrap();
 
         assert_eq!(msg, msg_ret);
     }
@@ -717,16 +745,21 @@ mod tests {
     /// in the functions of message)
     #[test]
     fn test_decode_and_encode() {
-        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
-        //let msg = Message::new_with_zero();
-
-        use crate::nodes::Identity;
-        let mut  id = Identity::new();
+        let mut encode_id = Identity::new();
+        let decode_id = Identity::new();
+        let decoder_name = decode_id.public_key_to_bytes();
+        //create a byte message
+        let msg = 
+            Message::new(encode_id.public_key_to_bytes(),  
+                    decoder_name, 
+                    Payload::Empty
+            );
 
         let mut buffer = vec![0u8; 10240];
-        msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+        msg.encode_into_slice(&mut encode_id, &mut buffer[..]).unwrap();
 
-        let msg_ret = Message::decode_from_slice(&buffer[..]);
+        let msg_ret =
+            Message::decode_from_slice(&decoder_name, &buffer[..]);
     
         assert_eq!(msg, msg_ret.unwrap());
     }

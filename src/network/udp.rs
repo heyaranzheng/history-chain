@@ -19,6 +19,7 @@ pub trait UdpConnection: Send + Sync {
     ///udp connection, receive message from all nodes, return message and source address
     ///if timeout, return error
     async fn udp_recv_from(
+        my_name: &HashValue,
         timeout_ms: u64,
         bind_addr: SocketAddr, 
     ) -> Result< (Message, SocketAddr), HError> 
@@ -53,7 +54,7 @@ pub trait UdpConnection: Send + Sync {
 
         //decode message from buffer with header
         let msg =
-            Message::decode_from_slice(&uninit_buffer[..size])?;
+            Message::decode_from_slice(my_name, &uninit_buffer[..size])?;
 
         Ok((msg, src_addr))
     }
@@ -86,6 +87,7 @@ pub trait UdpConnection: Send + Sync {
 
     ///an helper function for check_addresses_available, check if a addr is available
     async fn check_addr_available(
+        my_name: &HashValue,
         addr: &SocketAddr, 
         timeout_duration: std::time::Duration,
         msg_byte: &[u8],
@@ -94,6 +96,8 @@ pub trait UdpConnection: Send + Sync {
         //create a socket and send an message to dst_addr
         let bind_addr = format!("0.0.0.0:{}",UDP_CHECK_PORT);
         let udp_socket =UdpSocket::bind(bind_addr).await?;
+        
+        //------spawn
         udp_socket.send_to(msg_byte, addr).await?;
  
 
@@ -110,7 +114,7 @@ pub trait UdpConnection: Send + Sync {
         }
 
         //check the message
-        let msg = Message::decode_from_slice(&buffer[..size])?;
+        let msg = Message::decode_from_slice(my_name, &buffer[..size])?;
         if msg.payload != Payload::Empty { 
             return Err(HError::NetWork { message: format!("check_addr_available: failed") });
         }
@@ -131,6 +135,8 @@ pub trait UdpConnection: Send + Sync {
             return Err(HError::NetWork { message: format!("upd_connection error: have no addr_list") });
         }
 
+        //the name of the node
+        let my_name = &identity.public_key.to_bytes();
         //a buffer for encoded message
         let mut buffer = vec![0u8; MAX_MSG_SIZE];
 
@@ -138,14 +144,18 @@ pub trait UdpConnection: Send + Sync {
         let timeout_duration = std::time::Duration::from_millis(timeout_ms);
 
         //create a message and sign it with identity, encode it into a byte array.
-        let test_msg = Message::new(identity.public_key_to_bytes(), receiver, Payload::Empty);
+        let test_msg = Message::new(*my_name, receiver, Payload::Empty);
         let msg_len = test_msg.encode_into_slice(identity, &mut buffer[..])?;
 
         //create tasks to check if each address is available 
         let tasks = addr_list.iter().map(|addr| {
             let buffer_clone = buffer.clone();
             async move {
-                Self::check_addr_available(addr, timeout_duration, &buffer_clone[..msg_len]).await
+                Self::check_addr_available(
+                    my_name, 
+                    addr, 
+                    timeout_duration, 
+                    &buffer_clone[..msg_len]).await
             }
         });
 
@@ -166,11 +176,8 @@ pub trait UdpConnection: Send + Sync {
 
         Ok(addresses_available)
     }
-    
-
    
 }
-
 
 mod tests {
     use tokio::time::timeout;
@@ -179,27 +186,30 @@ mod tests {
     use crate::network::{Message, Payload};
     use crate::nodes::Identity;
     
+    struct Test;
+    impl UdpConnection for Test {}
 
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
+        let mut  encode_id = Identity::new();
+        let mut decode_id = Identity::new();
+
         let msg = Message::new(
-            ZERO_HASH, ZERO_HASH, Payload::Empty);
+            encode_id.public_key.to_bytes(),
+             decode_id.public_key.to_bytes(), 
+             Payload::Empty
+        );
         let save_msg = msg.clone();
-        struct Test;
-        
-        impl UdpConnection for Test {}
-        let mut test = Test;
+
         let dst_addr = SocketAddr::new(
             std::net::Ipv4Addr::new(127, 0, 0, 1).into(), 
             8081
         );
         let send_task = async move {
-            let src_addr = format!("127.0.0.1:8080").to_string();
-            Test::udp_send_to( dst_addr, &msg, &mut Identity::new()).await.unwrap();
+            Test::udp_send_to( dst_addr, &msg, &mut encode_id).await.unwrap();
         };
 
-        let mut test = Test;
         
         //crate a mpsc to send and recv message
         use tokio::sync::mpsc;
@@ -208,8 +218,12 @@ mod tests {
             std::net::Ipv4Addr::new(127, 0, 0, 1).into(), 
             8080
         );
+        let decoder_name = decode_id.public_key.to_bytes();
         let recv_task = async move {
-            let (msg, src_addr) = Test::udp_recv_from(110,bind_addr).await.unwrap();
+            let (msg, src_addr) = Test::udp_recv_from(
+                &decoder_name,
+                110,bind_addr
+            ).await.unwrap();
             sender.send( (msg, src_addr)).await.unwrap();
         };
         //if we sync the code below, we should use recv_task first, then send_task, 
@@ -223,8 +237,13 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn check_addr_available_test() -> Result<(), HError> { 
-        struct Test;
-        impl UdpConnection for Test {}
+        let mut server_id = Identity::new();
+        let mut client_id = Identity::new();
+
+        let server_name = server_id.public_key.to_bytes();
+        let server_name_clone = server_name.clone();
+        let client_name = client_id.public_key.to_bytes();
+       
 
         //create a notifier to tell the listener is ready
         let (tx,  rx) = tokio::sync::oneshot::channel();
@@ -237,14 +256,17 @@ mod tests {
             tx.send(true).unwrap();
             let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
         
-            let mut id = Identity::new();
             let looper_task = async {
                 loop {
                     let (_, src_addr) = socket.recv_from(&mut buffer[..]).await.unwrap();
-                    let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
+                    let msg = Message::new(
+                        server_name, 
+                        client_name,
+                        Payload::Empty
+                    );
                     let mut listener_buffer = vec![0u8; MAX_UDP_MSG_SIZE];
                    
-                    msg.encode_into_slice(&mut id, &mut listener_buffer[..]).unwrap();
+                    msg.encode_into_slice(&mut server_id , &mut listener_buffer[..]).unwrap();
                     socket.send_to(&listener_buffer[..], src_addr).await.unwrap();
                 }
             };
@@ -275,15 +297,21 @@ mod tests {
        
 
         //create a msg to send
-        let msg = Message::new(ZERO_HASH, ZERO_HASH, Payload::Empty);
-        let mut id = Identity::new();
+        let msg = Message::new(
+            client_id.public_key.to_bytes(), 
+            server_name_clone,
+            Payload::Empty
+        );
         let mut msg_bytes = vec![0u8; MAX_UDP_MSG_SIZE];
-        msg.encode_into_slice(&mut id,&mut  msg_bytes)?;
+        msg.encode_into_slice(&mut client_id,&mut  msg_bytes)?;
 
     
         let result_valid = 
             Test::check_addr_available(
-                &valid_addr, timeout_duration, &msg_bytes[..]
+                &client_id.public_key.to_bytes(),
+                &valid_addr, 
+                timeout_duration,
+                 &msg_bytes[..]
             ).await;
         match result_valid{
             Ok(_) => {
@@ -299,11 +327,79 @@ mod tests {
   
         let result_invalid = 
             Test::check_addr_available(
-                &invalid_addr, timeout_duration, &msg_bytes[..]
+                &client_id.public_key.to_bytes(),
+                &invalid_addr, 
+                timeout_duration, 
+                &msg_bytes[..]
             ).await;
         assert_eq!(result_invalid.is_ok(), false);
         Ok(())
 
     }
 
+    //test for check_addresses_available function
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_check_addresses_available() {
+        //preparation 
+
+        //create two identities
+        let mut client_id = Identity::new();
+        let mut server_id = Identity::new();
+        let server_name = server_id.public_key.to_bytes();
+        let client_name = client_id.public_key.to_bytes();
+        let server_name_clone = server_name.clone();
+
+
+        //create a timeout server to response the check message
+        let duration = std::time::Duration::from_millis(3000);  
+        let task = async move {
+            let udp_listener = UdpSocket::bind("127.0.0.1:8080").await.unwrap();
+
+            let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+
+            let looper_task = async {
+                loop {
+                    let (_, src_addr) = udp_listener.recv_from(&mut buffer[..]).await.unwrap();
+                    let msg = Message::new(
+                        server_name, 
+                        client_name, 
+                        Payload::Empty
+                    );
+                    let mut listener_buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+                    
+                    msg.encode_into_slice(&mut server_id , &mut listener_buffer[..]).unwrap();
+                    udp_listener.send_to(&listener_buffer[..], src_addr).await.unwrap();
+                }
+            };
+
+            let _ = timeout(duration, looper_task).await;         
+        };
+
+        tokio::spawn(task);
+        //wait for the listener to start
+        let sleep_duration = std::time::Duration::from_millis(1000);
+        tokio::time::sleep(sleep_duration).await;
+        //----------preparation end----------
+
+
+        //addresses list for test
+        let addresses = vec![
+            SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080),
+            SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8081),
+            SocketAddr::new(Ipv4Addr::new(127, 0, 0, 2).into(), 8080)
+        ];
+
+        let result = 
+            Test::check_addresses_available(
+                &addresses, 
+                3000, 
+                server_name_clone,
+                &mut client_id).await;
+        
+        assert_eq!(result.is_ok(), true);
+
+        let vec = result.unwrap();
+        assert_eq!(vec.len(), 1);
+        assert_eq!(vec[0], SocketAddr::new(Ipv4Addr::new(127, 0, 0, 1).into(), 8080));
+    }
 }

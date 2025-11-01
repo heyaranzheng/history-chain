@@ -10,8 +10,8 @@ use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
 use crate::network::{UdpConnection, Message, Payload};
-use crate::nodes::Identity;
-use crate::constants::UDP_RECV_PORT;
+use crate::nodes::{Identity, identity};
+use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
 
 
 
@@ -88,21 +88,21 @@ pub trait Node: UdpConnection{
             return Err(HError::Message {message: "introducer is not your friend".to_string()});
         }
 
-        //get the introducer's info
+        //get the introducer's info, and filter out the avaliable addresses of the introducer 
         let introducer_info = info.unwrap();
+        let dst_addr = &introducer_info.address;
+        let avaliable_addr = 
+            Self::check_addresses_available(dst_addr, timeout_ms, introducer, identity).await?;
+        if avaliable_addr.is_empty() {
+            return Err(HError::Message {message: "no avaliable address".to_string()});
+        }
+
+        //create a message for introducing a new node
         let msg = Message::new(
             self.name(), 
             introducer_info.name, 
             Payload::Introduce
         );
-
-        //filter out the avaliable addresses of the introducer
-        let dst_addr = introducer_info.address;
-        let avaliable_addr = 
-            Self::check_addresses_available(&dst_addr, timeout_ms, introducer, identity).await?;
-        if avaliable_addr.is_empty() {
-            return Err(HError::Message {message: "no avaliable address".to_string()});
-        }
 
         //send the message to the introducer，then wait for the response
         let _ = Self::udp_send_to(avaliable_addr[0], &msg, identity).await?;
@@ -111,7 +111,15 @@ pub trait Node: UdpConnection{
         let bind_addr = SocketAddr::new(
             Ipv4Addr::new(0, 0, 0, 0).into(), UDP_RECV_PORT
         );
-        let (msg, _) = Self::udp_recv_from( timeout_ms, bind_addr).await?;
+
+        let (msg, src_addr) = 
+            Self::udp_recv_from(&identity.public_key.to_bytes(), TIME_MS_FOR_UNP_RECV, bind_addr).await?;
+        
+        //check if the response is valid
+        if src_addr != introducer_info.address[0] {
+            return Err(HError::Message {
+                message: "response is not from the introducer".to_string()});
+        }
 
         //get out the node's info from the response
         let payload = msg.payload;
@@ -122,6 +130,9 @@ pub trait Node: UdpConnection{
                 message: "introduce response for a new node is not valid".to_string()
             })
         }
+
+        //TODO--------
+        //--------get the node's info from the response, and add it to the friends list.
         
     }
 
