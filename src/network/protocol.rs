@@ -15,6 +15,7 @@ use crate::nodes::{Identity, NodeInfo};
 use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
+use crate::nodes::Node;
 
 ///the signature of the message.
 type SignatureBytes = [u8; 64];
@@ -591,12 +592,16 @@ unsafe impl Sync for Message {}
 
 ///a handler for network messages.
 #[async_trait]
-trait Handler
+trait Handler: Node
 {
-    fn handle_block_recitify(&self, msg: Message) -> Result<(), HError>;
-    fn handle_chain_request(&self, msg: Message) -> Result<(), HError>;
-    fn handle_vote_block(&self, msg: Message) -> Result<(), HError>;
-    fn handle_search_friend(&self, msg: Message) -> Result<(), HError>;
+    fn handle_block_recitify(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
+    fn handle_chain_request(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
+    fn handle_vote_block(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
+    fn handle_search_friend(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
+    
+    
+    //--------------
+    //async fn handle_introduce(&self, identity: &mut Identity, msg: Message) {}
 }
 
 
@@ -607,21 +612,30 @@ pub struct MessageHandler  {
 
 #[async_trait]
 impl Handler for MessageHandler {
-    fn handle_block_recitify(&self, msg: Message) -> Result<(), HError> {
+   
+    fn handle_block_recitify(&self, identity: &mut Identity, msg: Message) 
+        -> Result<(), HError> 
+    {
         //TO DO
         Ok(())
     }
-    fn handle_chain_request(&self, msg: Message) -> Result<(), HError> {
+    fn handle_chain_request(&self, identity: &mut Identity, msg: Message) 
+        -> Result<(), HError> 
+    {
         //TO DO
         Ok(())
     }
  
     
-    fn handle_vote_block(&self, msg: Message) -> Result<(), HError> {
+    fn handle_vote_block(&self, identity: &mut Identity, msg: Message) 
+        -> Result<(), HError> 
+    {
         //TO DO
         Ok(())
     }
-    fn handle_search_friend(&self, msg: Message) -> Result<(), HError> {
+    fn handle_search_friend(&self, identity: &mut Identity, msg: Message) 
+        -> Result<(), HError> 
+    {
         //TO DO
         Ok(())
     }
@@ -635,19 +649,8 @@ impl MessageHandler {
             pipe: pipe_to_chain_keeper,
         }
     }
-
-    pub async fn handle(&self, msg: Message) -> Result<(), HError> {
-        //---------------------------------------------------------
-        //NEED TO ADD A FUNCTION HERE TO HANDLE THE MESSAGE.
-        match msg.payload {
-            Payload::BlockRecitify(_) => self.handle_block_recitify(msg),
-            Payload::ChainRequest(_) => self.handle_chain_request(msg),
-            Payload::VoteBlock(_) => self.handle_vote_block(msg),
-            Payload::SearchFriend(_) => self.handle_search_friend(msg),
-            Payload::Introduce => Ok(()), //TO DO
-            Payload::Empty => Ok(()),
-            Payload::IntroduceResp(_) => Ok(()),
-        }
+    async fn handle_message(&self, identity: &mut Identity, msg: Message) 
+        -> Result<(), HError> { 
     }
 
 }

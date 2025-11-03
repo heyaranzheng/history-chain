@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::net::{SocketAddr, Ipv4Addr};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use tokio::sync::Mutex;
 
 
 use crate::block::{Block, Carrier, Digester};
@@ -56,6 +58,7 @@ pub trait Node: UdpConnection{
     fn address(&self) -> SocketAddr;
     ///get node's friends
     fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
+
     
     ///Default Implmentation:
     ///check if the node is a friend 
@@ -130,9 +133,6 @@ pub trait Node: UdpConnection{
                 message: "introduce response for a new node is not valid".to_string()
             })
         }
-
-        //TODO--------
-        //--------get the node's info from the response, and add it to the friends list.
         
     }
 

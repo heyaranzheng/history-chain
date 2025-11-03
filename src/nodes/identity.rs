@@ -1,4 +1,4 @@
-
+use keyring::Entry;
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::{VerifyingKey, Signature, SigningKey, Verifier};
 use rand::rngs::OsRng;
@@ -55,7 +55,87 @@ impl Identity {
         public_key.verify(data, &signature)
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
     }
+
+    ///a helper function to transform a public key to a pem string
+    pub fn public_key_to_pem(&self) -> Result<pem::Pem, HError> {
+        //get the public key and secret key as pem format
+        pem::parse(self.public_key_to_bytes())
+            .map_err(|e|
+                HError::Identity { message: format!("parse public key error: {}", e) }
+            )
+    }
     
+    fn  save_secret_key_to_system(&self) -> Result<(), HError> {
+
+        //get the public key as pem format string
+        let public_pem = self.public_key_to_pem().to_string();
+
+        //get the secret key as pem format string
+        let secret_pem;
+        match &self.secret_key {
+            Some(secret_key) => {
+                secret_pem = pem::parse(secret_key.to_bytes())
+                .map_err(|e|
+                    HError::Identity { message: 
+                        format!("parse secret key error in save_secret_key: {}", e) 
+                    }
+                )?
+                .to_string();
+            }
+            None => return Err(HError::Identity {message: "No secret key".to_string()})   
+        }
+
+        //create a new entry in the keyring 
+        let entry = Entry::new(
+            "history-chain-secret-key", &public_pem
+        ).map_err(|e| 
+            HError::Identity {message: format!("create entry error in save_secret_key: {}", e)}
+        )?;
+
+        //save the secret key in the keyring
+        entry.set_password(&secret_pem)
+            .map_err(|e| 
+                HError::Identity {message: format!("set password error in save_secret_key: {}", e)}
+            )?;
+        
+        Ok(())
+    }
+    
+    ///load the identity from the keyring
+    pub fn load_secret_key(&mut self,node_name: &[u8; 32]) -> Result<Self, HError> {
+        let public_pem = self.public_key_to_pem()?.to_string();
+
+        //create a new entry in the keyring
+        let entry = Entry::new(
+            "history-chain-secret-key", &public_pem
+        ).map_err(|e| 
+            HError::Identity {message: format!("create entry error in load_secret_key: {}", e)}
+        )?;
+
+        //get the secret key from the keyring
+        let secret_pem = entry.get_password()
+            .map_err(|e| 
+                HError::Identity {
+                    message: format!("get password error in load_secret_key: {}", e)
+                }
+            )?;
+        //parse the secret key from pem format
+        let secret_key = pem::parse(secret_pem)
+            .map_err(|e|
+                HError::Identity { message: format!("parse secret key error in load_secret_key: {}", e) }
+            )?;
+        let secret_key_bytes: &[u8;32] = secret_key.contents().into();
+        let signingkey = SigningKey::from_bytes(secret_key_bytes)
+            .map_err(|e|
+                HError::Identity { message: format!("from bytes error in load_secret_key: {}", e) }
+            )?;
+
+
+
+
+    }
+
+        
 
 }
 
