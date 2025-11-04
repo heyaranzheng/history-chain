@@ -1,3 +1,4 @@
+use base64::Engine;
 use keyring::Entry;
 use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::{VerifyingKey, Signature, SigningKey, Verifier};
@@ -55,84 +56,93 @@ impl Identity {
         public_key.verify(data, &signature)
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
     }
-
-    ///a helper function to transform a public key to a pem string
-    pub fn public_key_to_pem(&self) -> Result<pem::Pem, HError> {
-        //get the public key and secret key as pem format
-        pem::parse(self.public_key_to_bytes())
-            .map_err(|e|
-                HError::Identity { message: format!("parse public key error: {}", e) }
-            )
-    }
     
+    ///save the secret key to the keyring
     fn  save_secret_key_to_system(&self) -> Result<(), HError> {
 
-        //get the public key as pem format string
-        let public_pem = self.public_key_to_pem().to_string();
-
-        //get the secret key as pem format string
-        let secret_pem;
-        match &self.secret_key {
-            Some(secret_key) => {
-                secret_pem = pem::parse(secret_key.to_bytes())
-                .map_err(|e|
-                    HError::Identity { message: 
-                        format!("parse secret key error in save_secret_key: {}", e) 
-                    }
-                )?
-                .to_string();
+        //get the public key and secret key as pem format string
+        let public_key_bytes = self.public_key_to_bytes();        
+        let secret_key_bytes = match &self.secret_key {
+            Some(secret_key_ref) => {
+                secret_key_ref.to_bytes()
+            },
+            None => {
+                return Err(HError::Identity {message: "No secret key".to_string()})
             }
-            None => return Err(HError::Identity {message: "No secret key".to_string()})   
-        }
+        };
+
+        //encode the public key and secret key as base64 string
+        let engine = base64::prelude::BASE64_URL_SAFE_NO_PAD;
+        let public_key_str = engine.encode(public_key_bytes);
+        let secret_key_str = engine.encode(secret_key_bytes);
 
         //create a new entry in the keyring 
         let entry = Entry::new(
-            "history-chain-secret-key", &public_pem
+            "history-chain-secret-key", &public_key_str
         ).map_err(|e| 
             HError::Identity {message: format!("create entry error in save_secret_key: {}", e)}
         )?;
 
         //save the secret key in the keyring
-        entry.set_password(&secret_pem)
+        entry.set_password(&secret_key_str)
             .map_err(|e| 
                 HError::Identity {message: format!("set password error in save_secret_key: {}", e)}
             )?;
-        
+        let string = entry.get_password().unwrap();
+        println!("secret key: {}", string);
         Ok(())
     }
     
     ///load the identity from the keyring
-    pub fn load_secret_key(&mut self,node_name: &[u8; 32]) -> Result<Self, HError> {
-        let public_pem = self.public_key_to_pem()?.to_string();
+    pub fn load_secret_key_from_system(&mut self) -> Result<(), HError> {
 
+
+        //create a base64 engine to decode and encode
+        let engine = base64::prelude::BASE64_URL_SAFE_NO_PAD;
+
+        //public_key_str is usesr name get the secret key from the keyring
+        let public_key_bytes = self.public_key_to_bytes();
+        let public_key_str = engine.encode(public_key_bytes);
+        
         //create a new entry in the keyring
         let entry = Entry::new(
-            "history-chain-secret-key", &public_pem
+            "history-chain-secret-key", &public_key_str
         ).map_err(|e| 
             HError::Identity {message: format!("create entry error in load_secret_key: {}", e)}
         )?;
 
         //get the secret key from the keyring
-        let secret_pem = entry.get_password()
+        let secret = entry.get_password()
             .map_err(|e| 
                 HError::Identity {
                     message: format!("get password error in load_secret_key: {}", e)
                 }
             )?;
-        //parse the secret key from pem format
-        let secret_key = pem::parse(secret_pem)
+     
+        //decode the secret key from base64 string
+        let secret_key_vec = engine.decode(secret)
             .map_err(|e|
-                HError::Identity { message: format!("parse secret key error in load_secret_key: {}", e) }
+                HError::Identity { message: format!("decode secret key error in load_secret_key: {}", e) }
             )?;
-        let secret_key_bytes: &[u8;32] = secret_key.contents().into();
-        let signingkey = SigningKey::from_bytes(secret_key_bytes)
-            .map_err(|e|
-                HError::Identity { message: format!("from bytes error in load_secret_key: {}", e) }
-            )?;
+        //check the length of the base64 result
+        if secret_key_vec.len() != 32 {
+            return Err(
+                HError::Identity { 
+                    message: format!("secret key length error in load_secret_key: {}", 
+                        secret_key_vec.len()) 
+                }
+            );
+        }
 
+        //create a array to copy the data from the base64 result
+        let mut secret_key_array = [0u8; 32];
+        secret_key_array.copy_from_slice(&secret_key_vec[..]);
+        let secret_key = SigningKey::from_bytes(&secret_key_array);
 
-
-
+        //keep the secret key in the identity
+        self.secret_key = Some(secret_key);
+        
+        Ok(())
     }
 
         
@@ -162,6 +172,18 @@ mod tests {
         let message = b"hello world";
         let signature = identity.sign_msg(message).unwrap();
         Identity::verify_signature_bytes(message, &identity.public_key_to_bytes(), &signature)?;
+        Ok(())
+    }
+
+    
+    #[test]
+    fn test_save_load_identity() -> Result<(), HError>{
+        let mut identity = Identity::new();
+        let save_result = identity.save_secret_key_to_system();
+        assert_eq!(save_result.is_ok(), true);
+        let load_result = identity.load_secret_key_from_system();
+        eprintln!("load_result: {:?}", load_result);
+        assert_eq!(load_result.is_ok(), true);
         Ok(())
     }
 }

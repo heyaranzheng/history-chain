@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+base64 = "0.22.1"
 bincode = "2.0.1"
 chrono = "0.4.41"
 ed25519-dalek = {version = "2.2.0", features = ["rand_core"]}
@@ -12,7 +13,6 @@ env_logger = "0.11.8"
 futures = "0.3.31"
 keyring = "3.6.3"
 log = "0.4.28"
-pem = "3.0.6"
 rand = "0.8"
 serde = "1.0.219"
 sha2 = "0.10.9"

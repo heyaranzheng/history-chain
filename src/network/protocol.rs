@@ -592,7 +592,7 @@ unsafe impl Sync for Message {}
 
 ///a handler for network messages.
 #[async_trait]
-trait Handler: Node
+trait Handler
 {
     fn handle_block_recitify(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
     fn handle_chain_request(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
@@ -639,6 +639,7 @@ impl Handler for MessageHandler {
         //TO DO
         Ok(())
     }
+    
 }
 
 
@@ -651,6 +652,8 @@ impl MessageHandler {
     }
     async fn handle_message(&self, identity: &mut Identity, msg: Message) 
         -> Result<(), HError> { 
+            //TO DO
+            Ok(())
     }
 
 }
