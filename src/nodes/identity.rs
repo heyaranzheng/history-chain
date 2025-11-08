@@ -4,11 +4,24 @@ use ed25519_dalek::ed25519::signature::SignerMut;
 use ed25519_dalek::{VerifyingKey, Signature, SigningKey, Verifier};
 use rand::rngs::OsRng;
 use tokio::sync::mpsc::{self, Sender, Receiver};
+use tokio::sync::oneshot;
 
 use crate::constants::MAX_UDP_MSG_SIZE;
 use crate::herrors::HError;
 use crate::hash::HashValue;
 use crate::network::Message;
+
+
+///request to sign a message
+pub struct SignRequest {
+    pub bytes_vec: Vec<u8>,
+    pub response: oneshot::Sender<Result<[u8; 64], HError>>,
+}
+
+///we can use this handle to send sign requests to the signer
+pub struct SignHandle {
+    sender: Sender<SignRequest>,
+}
 
 ///An identity is a public key and a secret key
 pub struct Identity{
@@ -71,8 +84,21 @@ impl Identity {
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
     }
 
-    pub async fn init_singer() -> Result< Sender< Result<&mut Message, HError>>, HError> {
- 
+    ///initialize a singer for the identity
+    pub async fn init_singer(self) -> Result<SignHandle, HError>{ 
+        let (tx, mut rx) = mpsc::channel::<SignRequest>(64);
+        let tx_clone = tx.clone();
+
+        tokio::task::spawn_blocking( move || {
+            let mut id = self;
+            while let Some(requset) = rx.blocking_recv() {
+                let signature = id.sign_msg(&requset.bytes_vec.as_slice());
+                let _ = requset.response.send(signature);
+            }
+        });
+
+        Ok(SignHandle { sender: tx_clone })
+        
     }
 
 }
