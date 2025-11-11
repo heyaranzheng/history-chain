@@ -10,6 +10,9 @@ pub enum HError {
 
     #[error("Error: {message}\n")]
     Message {message: String},
+    
+    #[error("Error: {message}\n")]
+    Protocol {message: String},
 
     #[error("io error:{0}\n")]
     IO(#[from] std::io::Error),

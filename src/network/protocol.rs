@@ -11,7 +11,7 @@ use crate::constants::{MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, ZERO_HASH};
 use crate::chain::{Chain, BlockChain};
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
-use crate::nodes::{Identity, NodeInfo};
+use crate::nodes::{Identity, NodeInfo, SignRequest, SignHandle};
 use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
@@ -51,7 +51,7 @@ impl Header {
     pub fn encode_into_slice(&self, buffer: &mut [u8]) -> Result<usize, HError> {
         //check buffer size
         if buffer.len() < 100 {
-            return Err(HError::Message 
+            return Err(HError::Protocol 
                 {
                     message: format!("in header encode_into_slice, buffer size is too small: {}", buffer.len()) 
                 })
@@ -66,17 +66,17 @@ impl Header {
         
         let size = 
             bincode::encode_into_slice(self.msg_length, &mut buffer[..4], config)
-            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "encode error in header".to_string() })?;
         total_size += size;
         println!("debug print-> header.msg_length size: {:?}", size);
         let size = 
             bincode::encode_into_slice(self.signature,&mut  buffer[4..68], config)
-            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "encode error in header".to_string() })?;
         total_size += size;
         println!("debug print-> header.signature size: {:?}", size);
         let size =
             bincode::encode_into_slice(self.public_key, &mut buffer[68..100], config)
-            .map_err(|_| HError::Message { message: "encode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "encode error in header".to_string() })?;
         total_size += size;
         println!("debug print-> header.public_key size: {:?}", size);
         
@@ -94,16 +94,16 @@ impl Header {
 
         //check the size of the data
         if data.len() < 100 {
-            return Err(HError::Message { message: "header too small".to_string() });
+            return Err(HError::Protocol { message: "header too small".to_string() });
         }
 
         //decode the header from a slice one by one.
         let (length, _) = bincode::decode_from_slice::<u32, _>(&data[..4], config)
-            .map_err(|_| HError::Message { message: "decode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "decode error in header".to_string() })?;
         let (signature, _) = bincode::decode_from_slice::<SignatureBytes, _>(&data[4..68], config)
-            .map_err(|_| HError::Message { message: "decode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "decode error in header".to_string() })?;
         let (public_key, _) = bincode::decode_from_slice::<HashValue, _>(&data[68..100], config)
-            .map_err(|_| HError::Message { message: "decode error in header".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "decode error in header".to_string() })?;
         let header = Header::new(length, signature, public_key);
         
         Ok(header)
@@ -456,11 +456,11 @@ impl Message {
                 let config = bincode::config::standard().with_big_endian();
                 //decode the slice to a message
                 let (msg, _): ( Self, _) = bincode::decode_from_slice(slice, config)
-                    .map_err(|_| HError::Message { message: "decode error in message".to_string() })?;
+                    .map_err(|_| HError::Protocol { message: "decode error in message".to_string() })?;
 
                 //verify if the sender's name in message is equal to the public key in header
                 if msg.sender != header.public_key {
-                    return Err(HError::Message {
+                    return Err(HError::Protocol {
                         message: "sender's name in message is not equal to the 
                             sender's name in header, this message is not valid".to_string(),
                     });
@@ -468,7 +468,7 @@ impl Message {
 
                 //verify if the receiver's name in message is equal to the name of the node.
                 if msg.receiver != *my_name  {
-                    return Err(HError::Message {
+                    return Err(HError::Protocol {
                         message: "receiver's name in message is not equal to the 
                             name of the node, it means the message is not for this node".to_string(),
                     });
@@ -479,7 +479,7 @@ impl Message {
 
             }
             Err(e) => {
-                Err(HError::Message { message: format!("verify error in message: {}", e) })
+                Err(HError::Protocol { message: format!("verify error in message: {}", e) })
             }
         }
     }
@@ -489,7 +489,7 @@ impl Message {
         let header_size = Header::header_size();
         //check the size of the slice
         if slice.len() < header_size {
-            return Err(HError::Message { message: "header size is too small, it can't be valid".to_string() });
+            return Err(HError::Protocol { message: "header size is too small, it can't be valid".to_string() });
         }
         
         //get the header from the slice
@@ -499,7 +499,7 @@ impl Message {
         let msg_byte_size = header.msg_length as usize;
         //check the size of the message
         if slice.len() < msg_byte_size + header_size {
-            return Err(HError::Message { message: "message size is too small, it can't be valid".to_string() });
+            return Err(HError::Protocol { message: "message size is too small, it can't be valid".to_string() });
         }
     
         let end_index = header_size + msg_byte_size;
@@ -520,14 +520,14 @@ impl Message {
     pub fn encode_into_slice(&self, identity:&mut Identity, buffer: &mut [u8]) -> Result<usize, HError> {
         //check buffer size
         if buffer.len() < MAX_UDP_MSG_SIZE {
-            return Err(HError::Message { message: "buffer size is too small".to_string() });
+            return Err(HError::Protocol { message: "buffer size is too small".to_string() });
         }
 
         //create a config for bincode, with big-endian
         let config = bincode::config::standard().with_big_endian();
         //encode the message to a vector, leave enough space for the header.
         let  size = bincode::encode_into_slice(self, &mut buffer[100..], config)
-            .map_err(|_| HError::Message { message: "encode error in message".to_string() })?;
+            .map_err(|_| HError::Protocol { message: "encode error in message".to_string() })?;
 
         //check the size of the message
         let total_size = size + 100;
@@ -535,7 +535,7 @@ impl Message {
             //-----------------------------------------
             //NEED TO ADD A CHUNKING FUNCTION HERE( the public_key only send at the first time.)
             //-----------------------
-            return Err(HError::Message 
+            return Err(HError::Protocol 
                 { message: "message too large, It's bigger than MAX_MSG_SIZE".to_string() 
             });    
         }
@@ -548,6 +548,58 @@ impl Message {
         let _ = header.encode_into_slice(&mut buffer[..100])?;
         Ok(size)
     }
+
+    pub async fn encode_into_slice_v2(&self, sign_handle: SignHandle, buffer: &mut [u8] )
+        -> Result<usize, HError>
+    {
+        if buffer.len() < MAX_UDP_MSG_SIZE {
+            return Err(HError::Protocol { message: "buffer size is too small".to_string() });
+        }
+
+        //create a config for bincode, with big-endian
+        let config = bincode::config::standard().with_big_endian();
+        //encode the message to a vector, leave enough space for the header.
+        let  size = bincode::encode_into_slice(self, &mut buffer[100..], config)
+            .map_err(|_| HError::Protocol { message: "encode error in message".to_string() })?;
+
+        //check the size of the message
+        let total_size = size + 100;
+        if total_size > MAX_UDP_MSG_SIZE {
+            //-----------------------------------------
+            //NEED TO ADD A CHUNKING FUNCTION HERE( the public_key only send at the first time.)
+            //-----------------------
+            return Err(HError::Protocol 
+                { message: "message too large, It's bigger than MAX_MSG_SIZE".to_string() 
+            });    
+        }
+
+       
+        let (tx, rx) 
+            = tokio::sync::oneshot::channel::<Result<[u8; 64], HError>>();
+        let sign_request = SignRequest {
+            bytes_vec: buffer.to_vec(),
+            response: tx,
+        };
+        
+        //send the request to the signer to get the signature
+        sign_handle.send(sign_request).await;
+        let signature = rx.await
+            .map_err(|e| 
+                HError::Protocol { message: 
+                    format!("error in protocol, function encode_into_selice,
+                        to get signature from the signer. error: {} 
+                    ", e)
+                }
+            )??;
+        //add the header to the buffer
+        let header = Header::new(size as u32, signature,
+             sign_handle.public_key_bytes());
+        let _ = header.encode_into_slice(&mut buffer[..100])?;
+        Ok(size)
+        
+        
+    }
+    
 
     //send the message to a stream.
     pub async fn into_stream<S> (&self, identity: &mut Identity, stream: &mut S) -> Result<(), HError>
@@ -662,7 +714,7 @@ impl MessageHandler {
 mod tests {
     use tokio::io::AsyncSeekExt;
 
-    use crate::network::signal;
+    use crate::{network::signal, nodes::SignHandle};
     use bincode::{Decode, Encode};
 
     use super::*;
@@ -768,6 +820,13 @@ mod tests {
             Message::decode_from_slice(&decoder_name, &buffer[..]);
     
         assert_eq!(msg, msg_ret.unwrap());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_encode_into_slice_v2() {
+        let id = Identity::new();
+        let sign_handle
+             = SignHandle::new(id).await;
     }
 
 }

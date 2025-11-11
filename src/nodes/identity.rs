@@ -18,14 +18,62 @@ pub struct SignRequest {
     pub response: oneshot::Sender<Result<[u8; 64], HError>>,
 }
 
+unsafe impl Send for SignRequest {}
+unsafe impl Sync for SignRequest {}
 
 
 
-
-
-///we can use this handle to send sign requests to the signer
+#[derive(Clone)]
 pub struct SignHandle {
+    public_key_bytes: [u8; 32],
     sender: Sender<SignRequest>,
+}
+
+impl SignHandle {
+    //create a new thread to handle the signing affairs
+    pub async fn new(id: Identity) -> Result<Self, HError> {
+        //this function init_signer() just create a new thread to handle the signing
+        //so the await will NOT block the main thread
+        SignHandle::init_signer(id).await
+    }
+
+    ///initialize a singer for the identity this
+    async fn init_signer(mut id: Identity) -> Result<SignHandle, HError>{ 
+        let (tx, mut rx) = 
+            mpsc::channel::<SignRequest>(64);
+        let tx_clone = tx.clone();
+
+        let public_key_bytes = id.public_key_to_bytes();
+        tokio::task::spawn_blocking( move || {
+            while let Some(requset) = rx.blocking_recv() {
+                let signature = id.sign_msg(&requset.bytes_vec.as_slice());
+                let _ = requset.response.send(signature);
+            }
+        });
+
+        Ok(SignHandle {
+            public_key_bytes,
+            sender: tx_clone 
+        })
+        
+    }
+    pub async fn send(&self, sign_request: SignRequest) -> Result<(), HError>
+    {
+        self.sender.send(sign_request).await
+            .map_err(|e| 
+                HError::Identity { message : 
+                    format!("error in function send, SignHadnle in identity :
+                {}", e)
+                }
+            )
+    }
+
+    ///return the public key of [u8;32]
+    pub fn public_key_bytes(&self) -> [u8;32]
+    {
+        self.public_key_bytes.clone()
+    }
+
 }
 
 
@@ -90,22 +138,7 @@ impl Identity {
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
     }
 
-    ///initialize a singer for the identity
-    pub async fn init_singer(self) -> Result<SignHandle, HError>{ 
-        let (tx, mut rx) = mpsc::channel::<SignRequest>(64);
-        let tx_clone = tx.clone();
-
-        tokio::task::spawn_blocking( move || {
-            let mut id = self;
-            while let Some(requset) = rx.blocking_recv() {
-                let signature = id.sign_msg(&requset.bytes_vec.as_slice());
-                let _ = requset.response.send(signature);
-            }
-        });
-
-        Ok(SignHandle { sender: tx_clone })
-        
-    }
+    
 
 }
 
@@ -141,10 +174,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn  test_singer() {
         let id = Identity::new();
-        let public_key = id.public_key_to_bytes();
+        let handle = SignHandle::new(id).await.unwrap();
+        let public_key = handle.public_key_bytes();
 
-        let handle = id.init_singer().await.unwrap();
-        let handle_clone = SignHandle { sender: handle.sender.clone() };
+        let handle_clone = handle.clone();
         let msg = b"hello world";
         let signature = sgin_v2_test(msg, handle).await.unwrap();
   
