@@ -552,6 +552,7 @@ impl Message {
     pub async fn encode_into_slice_v2(&self, sign_handle: SignHandle, buffer: &mut [u8] )
         -> Result<usize, HError>
     {
+         //check buffer size
         if buffer.len() < MAX_UDP_MSG_SIZE {
             return Err(HError::Protocol { message: "buffer size is too small".to_string() });
         }
@@ -573,30 +574,13 @@ impl Message {
             });    
         }
 
-       
-        let (tx, rx) 
-            = tokio::sync::oneshot::channel::<Result<[u8; 64], HError>>();
-        let sign_request = SignRequest {
-            bytes_vec: buffer.to_vec(),
-            response: tx,
-        };
-        
-        //send the request to the signer to get the signature
-        sign_handle.send(sign_request).await;
-        let signature = rx.await
-            .map_err(|e| 
-                HError::Protocol { message: 
-                    format!("error in protocol, function encode_into_selice,
-                        to get signature from the signer. error: {} 
-                    ", e)
-                }
-            )??;
+        //sign the message
+        let signature = sign_handle.sign(&buffer[100..total_size]).await?;
         //add the header to the buffer
         let header = Header::new(size as u32, signature,
              sign_handle.public_key_bytes());
         let _ = header.encode_into_slice(&mut buffer[..100])?;
-        Ok(size)
-        
+        Ok(size) 
         
     }
     
@@ -824,9 +808,42 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_encode_into_slice_v2() {
-        let id = Identity::new();
-        let sign_handle
-             = SignHandle::new(id).await;
+        //create two identities 
+        let encode_id = Identity::new();
+        let decode_id = Identity::new();
+
+        //create a signer using the encode_id
+        let handle_result
+             = SignHandle::new(encode_id).await;
+        
+        //the result should be successful.
+        assert_eq!(handle_result.is_ok(), true);
+        let sign_handle = handle_result.unwrap();
+
+        //create a message, the message is created with encode_id, and signed by the itself.
+        let msg = Message::new(
+            sign_handle.public_key_bytes(),  
+            decode_id.public_key_to_bytes(),  
+            Payload::Empty
+        );
+        let mut buffer = vec![0u8; 10240];
+        let msg_bytes_size_result = 
+            msg.encode_into_slice_v2(sign_handle, &mut buffer[..]).await;
+        
+        //the encode and sign process should be successful.
+        assert_eq!(msg_bytes_size_result.is_ok(), true);
+        let msg_bytes_size = msg_bytes_size_result.unwrap();
+
+        //decode the message from the buffer
+        let msg = Message::decode_from_slice(
+            &decode_id.public_key_to_bytes(), 
+            &buffer[..]
+        );
+
+        eprintln!("msg_bytes_size: {}", msg_bytes_size);
+
+        //the decode process should be successful.
+        assert_eq!(msg.is_ok(), true);
     }
 
 }

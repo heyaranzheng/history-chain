@@ -74,6 +74,31 @@ impl SignHandle {
         self.public_key_bytes.clone()
     }
 
+    ///sign a message using handler, return the signature as [u8;64]
+    pub async fn sign(&self, bytes: &[u8]) -> 
+        Result<[u8; 64], HError>
+    {
+        //create a sign request
+        let (tx,  rx) = 
+            oneshot::channel::<Result<[u8; 64], HError>>();
+        let request = SignRequest {
+            bytes_vec: bytes.to_vec(),
+            response: tx,
+        };
+
+        //send the request to the signer
+        self.send(request).await?;
+
+        //wait  for the response
+        let signature_result = 
+            rx.await.map_err(|e|
+                HError::Identity { message : 
+                    format!("error in function sign_message, SignHadnle in identity :
+                {}", e)
+                }
+            )?;
+        signature_result
+    }
 }
 
 
@@ -155,7 +180,7 @@ impl Clone for Identity {
     }
 }
 
-
+#[cfg(test)]
 mod tests {
     use std::thread::spawn;
 
@@ -212,6 +237,21 @@ mod tests {
         let signature = rx.await.unwrap().unwrap();
         Ok(signature)
         
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_sgin_handle_sign() {
+        let id = Identity::new();
+        let handle = SignHandle::new(id).await.unwrap();
+        let public_key = handle.public_key_bytes();
+
+        let msg = b"hello world";
+        let signature = handle.sign(msg).await.unwrap();
+        let result =Identity::verify_signature_bytes(
+            msg, 
+            &public_key, 
+            &signature);
+        assert_eq!(result.is_ok(), true);
     }
 
 }
