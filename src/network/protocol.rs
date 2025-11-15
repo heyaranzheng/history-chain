@@ -549,7 +549,11 @@ impl Message {
         Ok(size)
     }
 
-    pub async fn encode_into_slice_v2(&self, sign_handle: SignHandle, buffer: &mut [u8] )
+    ///encode the message, then sign it.
+    ///the header with the signature is added to the buffer's head.
+    ///the encoded message is followed after the header bytes.
+    ///the return value is the total size of the encoded header and and message.
+    pub async fn encode(&self, sign_handle: SignHandle, buffer: &mut [u8] )
         -> Result<usize, HError>
     {
          //check buffer size
@@ -576,12 +580,14 @@ impl Message {
 
         //sign the message
         let signature = sign_handle.sign(&buffer[100..total_size]).await?;
+        
         //add the header to the buffer
         let header = Header::new(size as u32, signature,
              sign_handle.public_key_bytes());
-        let _ = header.encode_into_slice(&mut buffer[..100])?;
-        Ok(size) 
+        let header_size = Header::header_size();
+        let _ = header.encode_into_slice(&mut buffer[..header_size])?;
         
+        Ok(total_size) 
     }
     
 
@@ -807,7 +813,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_encode_into_slice_v2() {
+    async fn test_encode() {
         //create two identities 
         let encode_id = Identity::new();
         let decode_id = Identity::new();
@@ -828,7 +834,7 @@ mod tests {
         );
         let mut buffer = vec![0u8; 10240];
         let msg_bytes_size_result = 
-            msg.encode_into_slice_v2(sign_handle, &mut buffer[..]).await;
+            msg.encode(sign_handle, &mut buffer[..]).await;
         
         //the encode and sign process should be successful.
         assert_eq!(msg_bytes_size_result.is_ok(), true);

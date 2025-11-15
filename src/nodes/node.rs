@@ -12,7 +12,7 @@ use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
 use crate::network::{UdpConnection, Message, Payload};
-use crate::nodes::{Identity, identity};
+use crate::nodes::{Identity, identity,SignHandle};
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
 
 
@@ -59,7 +59,6 @@ pub trait Node: UdpConnection{
     ///get node's friends
     fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
 
-    
     ///Default Implmentation:
     ///check if the node is a friend 
     fn is_friend(&self, name: HashValue) -> bool{
@@ -83,7 +82,7 @@ pub trait Node: UdpConnection{
     async fn make_new(
         &self, introducer: NodeName, 
         timeout_ms: u64, 
-        identity: &mut Identity
+        sign_handle: SignHandle,
     ) -> Result<NodeInfo, HError>{
         //check if the introducer is a friend
         let info = self.get(introducer);
@@ -94,8 +93,9 @@ pub trait Node: UdpConnection{
         //get the introducer's info, and filter out the avaliable addresses of the introducer 
         let introducer_info = info.unwrap();
         let dst_addr = &introducer_info.address;
+
         let avaliable_addr = 
-            Self::check_addresses_available(dst_addr, timeout_ms, introducer, identity).await?;
+            Self::check_addresses_available(dst_addr, timeout_ms, introducer, sign_handle.clone()).await?;
         if avaliable_addr.is_empty() {
             return Err(HError::Message {message: "no avaliable address".to_string()});
         }
@@ -108,7 +108,7 @@ pub trait Node: UdpConnection{
         );
 
         //send the message to the introducer，then wait for the response
-        let _ = Self::udp_send_to(avaliable_addr[0], &msg, identity).await?;
+        let _ = Self::udp_send_to(avaliable_addr[0], &msg, sign_handle.clone()).await?;
 
         //bind a temporary ip to receive the response
         let bind_addr = SocketAddr::new(
@@ -116,7 +116,7 @@ pub trait Node: UdpConnection{
         );
 
         let (msg, src_addr) = 
-            Self::udp_recv_from(&identity.public_key.to_bytes(), TIME_MS_FOR_UNP_RECV, bind_addr).await?;
+            Self::udp_recv_from(&sign_handle.public_key_bytes(), TIME_MS_FOR_UNP_RECV, bind_addr).await?;
         
         //check if the response is valid
         if src_addr != introducer_info.address[0] {
@@ -131,7 +131,7 @@ pub trait Node: UdpConnection{
         }else {
             Err(HError::Message {
                 message: "introduce response for a new node is not valid".to_string()
-            })
+            }) 
         }
         
     }
@@ -149,21 +149,6 @@ pub trait Node: UdpConnection{
         );
 
         Ok(())
-    }
-
-   
-    async fn search_name(&self, name: HashValue) {
-        
-    }
-
-
-    ///make a friend with the given node's name
-    async fn make_friend_(&self, name: HashValue) -> Result<(), HError>{
-
-        Ok(())
-
-
-
     }
 }
 

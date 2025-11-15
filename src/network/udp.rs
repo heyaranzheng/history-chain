@@ -13,6 +13,7 @@ use crate::herrors::HError;
 use crate::nodes::Identity;
 use crate::network::protocol::{Message, Payload, Header};
 use crate::hash::HashValue;
+use crate::nodes::SignHandle;
 
 #[async_trait]
 pub trait UdpConnection: Send + Sync {
@@ -60,27 +61,28 @@ pub trait UdpConnection: Send + Sync {
     }
 
 
-    ///udp connection, send message to another node
+    ///udp connection, send message to another node, return the total size of 
+    ///the message and the header 
     async fn udp_send_to(
         dst_addr: SocketAddr, 
         msg: &Message,
-        identity: & mut Identity,
+        sign_handle: SignHandle,
     ) -> Result<usize, HError> 
         where Self: Send + Sync
     
     {
         //encode message into buffer with a header
-        let mut uninit_buffer = Vec::with_capacity(MAX_UDP_MSG_SIZE);
-        unsafe { uninit_buffer.set_len(MAX_UDP_MSG_SIZE) };
+        let mut buffer =vec![0u8; MAX_UDP_MSG_SIZE];
         let header_size = Header::header_size();
-        let total_size = msg.encode_into_slice(identity, &mut uninit_buffer[..])? + header_size;
+        let size = msg.encode(sign_handle, &mut buffer[..]).await?;
+        let total_size = size + header_size;
 
         //bind self address and udp port
         let my_addr = 
             SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), UDP_CHECK_PORT);
         let udp_socket =UdpSocket::bind( my_addr).await?;
         //send data to dst_addr 
-        let _ = udp_socket.send_to(&uninit_buffer[..total_size], dst_addr).await?;
+        let _ = udp_socket.send_to(&buffer[..total_size], dst_addr).await?;
         Ok(total_size)
         
     }
@@ -126,7 +128,7 @@ pub trait UdpConnection: Send + Sync {
         addr_list: &Vec<SocketAddr>, 
         timeout_ms: u64,
         receiver: HashValue,
-        identity: & mut Identity,
+        sign_handle: SignHandle,
     ) -> Result< Vec<SocketAddr>, HError> 
         where Self: Send + Sync
     {
@@ -136,7 +138,7 @@ pub trait UdpConnection: Send + Sync {
         }
 
         //the name of the node
-        let my_name = &identity.public_key.to_bytes();
+        let my_name = &sign_handle.public_key_bytes();
         //a buffer for encoded message
         let mut buffer = vec![0u8; MAX_MSG_SIZE];
 
@@ -145,7 +147,7 @@ pub trait UdpConnection: Send + Sync {
 
         //create a message and sign it with identity, encode it into a byte array.
         let test_msg = Message::new(*my_name, receiver, Payload::Empty);
-        let msg_len = test_msg.encode_into_slice(identity, &mut buffer[..])?;
+        let total_len = test_msg.encode(sign_handle, &mut buffer[..]).await?;
 
         //create tasks to check if each address is available 
         let tasks = addr_list.iter().map(|addr| {
@@ -155,7 +157,7 @@ pub trait UdpConnection: Send + Sync {
                     my_name, 
                     addr, 
                     timeout_duration, 
-                    &buffer_clone[..msg_len]).await
+                    &buffer_clone[..total_len]).await
             }
         });
 
@@ -180,6 +182,7 @@ pub trait UdpConnection: Send + Sync {
 }
 
 mod tests {
+    use sqlx::encode;
     use tokio::time::timeout;
     use super::*;
     use crate::constants::{ZERO_HASH, MAX_UDP_MSG_SIZE};
@@ -192,11 +195,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
-        let mut  encode_id = Identity::new();
-        let mut decode_id = Identity::new();
+        let  encode_id = Identity::new();
+        let signal_handle = SignHandle::new(encode_id).await.unwrap();
+        let decode_id = Identity::new();
 
         let msg = Message::new(
-            encode_id.public_key.to_bytes(),
+            signal_handle.public_key_bytes(), 
              decode_id.public_key.to_bytes(), 
              Payload::Empty
         );
@@ -207,7 +211,7 @@ mod tests {
             8081
         );
         let send_task = async move {
-            Test::udp_send_to( dst_addr, &msg, &mut encode_id).await.unwrap();
+            Test::udp_send_to( dst_addr, &msg, signal_handle).await.unwrap();
         };
 
         
@@ -348,6 +352,7 @@ mod tests {
         let server_name = server_id.public_key.to_bytes();
         let client_name = client_id.public_key.to_bytes();
         let server_name_clone = server_name.clone();
+        let sign_handle = SignHandle::new(client_id).await.unwrap();
 
 
         //create a timeout server to response the check message
@@ -394,7 +399,8 @@ mod tests {
                 &addresses, 
                 3000, 
                 server_name_clone,
-                &mut client_id).await;
+                sign_handle
+            ).await;
         
         assert_eq!(result.is_ok(), true);
 
