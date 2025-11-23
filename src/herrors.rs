@@ -31,8 +31,9 @@ pub enum HError {
     #[error( "mpsc error:{0}\n")]
     Mpsc(#[from] tokio::sync::mpsc::error::SendError<String>),
 
-    #[error("oneshot error:{0}\n")]
-    Oneshot(#[from] tokio::sync::oneshot::error::RecvError),
+    #[error("oneshot receive error:{0}\n")]
+    OneShot(#[from] tokio::sync::oneshot::error::RecvError),
+
 
     #[error("Network error:{message}\n")]
     NetWork {message: String },

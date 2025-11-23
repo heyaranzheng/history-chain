@@ -1,50 +1,115 @@
 
+use tokio::sync::{mpsc, oneshot};
 use async_trait::async_trait;
-use futures::channel::mpsc;
+
 
 use crate::{herrors::HError, network::Message, nodes::NodeInfo};
 
 #[async_trait]
 pub trait HandlerTrait {
-    async fn handle_introduce(&self, msg: Message, pipe: Pipe<Message>) -> Result<NodeInfo, HError>{
+//    async fn handle_introduce(&self, msg: Message) -> Result<NodeInfo, HError>{
+}
 
-    }
+#[async_trait]
+pub trait Client {
+    async fn cli_send<T>(&self, data: T ) -> Result<(), HError>;
 }
 
 pub struct Request<T> {
-    pub sender: oneshot::Sender<T>,
-    pub data: T,
+    sender: oneshot::Sender<T>,
+    data: T,
 }
 
-impl Request<T> {
-    pub fn new(data: T) -> Self {
-        let (tx, rx) = oneshot::channel();
-        Self { sender: tx, data }
-    }    
-}
+impl <T> Request<T> {
+    fn new(data: T) -> (Self, Response<T>) {
+        let (tx, rx) 
+            = oneshot::channel::<T>();
+        (
+            Self { sender: tx, data },
+            Response {receiver: rx},
+        )
+    }
 
-pub struct RequestSender<T> {
-    pub sender: mpsc::Sender<Request<T>>,
-}
-
-impl RequestSender<T> {
-    pub fn channel(capacity: usize) -> (RequestReciver<T>, Self) {
-        let (sender, request_receiver) = 
-            mpsc::channel::<Request<T>>(capacity);
-        (request_receiver, Self { sender })
+    pub async fn send(data: T, worker: RequestWorker<T>) -> Result<Response<T>, HError>{
+        let (request, response) = Request::new(data);
+        worker.send_to_worker(request).await?;
+        Ok(response)
     }
 }
 
-type RequestReciver<T> = mpsc::Receiver<Request<T>>;
 
-#[async_trait]
-pub trait Reciver{
-    async fn recv() -> Result<Request<T>, HError>;
+pub struct Response<T> {
+    receiver: oneshot::Receiver<T>,
 }
-impl <T> Reciver for RequestReciver<T> {
-    async fn recv() -> Result<Request<T>, HError> {
-        self.rev().await
-    }   
+
+impl <T> Response<T> {
+    pub async fn response(self) -> Result<T, HError> {
+        self.receiver.await.map_err(|e| 
+            HError::Message { message: format!("Response error:{:?}", e).to_string()
+            }
+        )
+    }
 }
+
+
+
+#[derive(Clone)]
+pub struct RequestWorker<T> {
+    pub sender: mpsc::Sender<Request<T>>,
+}
+
+impl <T> RequestWorker<T> {
+    async fn send_to_worker(&self, req: Request<T>) -> Result<(), HError> {       
+        self.sender.send(req).await.map_err(|e| 
+            HError::Message { message: 
+                format!("Request send to worker error:{:?}", e).to_string()
+            }
+        )
+    }
+
+
+}
+
+
+
+pub struct WrokReceiver<T> {
+    pub receiver: mpsc::Receiver<Request<T>>,
+}
+
+impl <T> WrokReceiver<T> {
+    fn new(receiver: mpsc::Receiver<Request<T>>) -> Self {
+        Self { receiver }
+    }
+
+    pub async fn recv_work(&mut self) -> Option<Request<T>> {
+        self.receiver.recv().await
+    }
+}
+
+pub struct Worker<'worker, T> {
+    sender: RequestWorker<T>,
+    receiver: WrokReceiver<T>,
+    task: Box<dyn Fn(T) -> Result<T, HError> + Send + 'worker>,
+}
+
+impl <'worker,T> Worker<'worker, T> {
+    pub fn new< F: Fn(T) -> Result<T, HError> + Send + 'worker>(
+        capacity: usize,
+        task: F,
+    ) -> Self  {
+        let (sender, receiver) = 
+            mpsc::channel::<Request<T>>(capacity);
+        let sender = RequestWorker { sender };
+        let receiver = WrokReceiver::new(receiver);
+        Self {
+            sender,
+            receiver,
+            task: Box::new(task),
+        }
+        
+    }
+}
+
+
 
 
