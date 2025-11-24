@@ -1,6 +1,8 @@
 
 use tokio::sync::{mpsc, oneshot};
+use tokio:
 use async_trait::async_trait;
+use tokio_util::sync::CancellationToken;
 
 
 use crate::{herrors::HError, network::Message, nodes::NodeInfo};
@@ -93,7 +95,7 @@ pub struct Worker<'worker, T> {
 }
 
 impl <'worker,T> Worker<'worker, T> {
-    pub fn new< F: Fn(T) -> Result<T, HError> + Send + 'worker>(
+    fn new< F: Fn(T) -> Result<T, HError> + Send + 'worker>(
         capacity: usize,
         task: F,
     ) -> Self  {
@@ -107,6 +109,29 @@ impl <'worker,T> Worker<'worker, T> {
             task: Box::new(task),
         }
         
+    }
+
+    pub async fn run(&mut self, canc_token: CancellationToken ) -> Result<(),HError> {
+        loop {
+            tokio::select! {
+                request = self.receiver.recv_work() => {
+                    match request {
+                        Some(req) => {
+                            let response = self.task(req.data)?;
+                            req.sender.send(response)?;
+                        }
+                        None => {
+                            continue;
+                        }
+                    }
+                }
+
+                _ =canc_token.cancelled() => {
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
