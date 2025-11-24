@@ -202,10 +202,26 @@ mod test{
         let _ = worker.run(canc_token.clone()).await;
 
         // Send a request and wait for response
-        let response = Request::send(1, request_worker).await.unwrap();
+        let response = Request::send(1, request_worker.clone()).await.unwrap();
         let result = response.response().await.unwrap();
+
         
         // Verify we got the expected result (1 + 1 = 2)
         assert_eq!(result, 2);
+
+        // Send another request and wait for response (3 + 1 = 4)
+        let response2 = 
+            Request::send(3, request_worker.clone()).await.unwrap();
+        let result2 = response2.response().await.unwrap();
+        assert_eq!(result2, 4);
+
+        // Cancel the worker's task, then send another request, we will
+        // get an error
+        canc_token.cancel();
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        let response3 = 
+            Request::send(5, request_worker.clone()).await;
+        assert_eq!(response3.is_ok(), false);
+        
     }
 }
