@@ -1,22 +1,16 @@
 use tokio::sync::{mpsc, oneshot};
-use std::{any::Any, marker::PhantomData};
-use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
-use crate::{herrors::HError, network::Message, nodes::NodeInfo};
+use crate::herrors::HError;
 
-/// Trait for handling network messages
-#[async_trait]
-pub trait HandlerTrait {
-    // async fn handle_introduce(&self, msg: Message) -> Result<NodeInfo, HError>;
-}
+
 
 /// A request containing data to be processed and a sender to return the response
 pub struct Request<T> {
-    /// One-shot sender to send the response back to the requester
+    /// One-shot sender to send the response back to the requester.
     sender: oneshot::Sender<T>,
     /// The data to be processed by the worker
-    data: T,
+    pub data: T,
 }
 
 impl <T> Request<T> {
@@ -37,6 +31,17 @@ impl <T> Request<T> {
         worker.send_to_worker(request).await?;
         Ok(response)
     }
+
+    /// This is a way to send a response back to the requestor or the client, 
+    /// if the server get the request from a client and wants to send a response data
+    /// back to the client.
+    pub fn send_back(&self, data: T) -> Result<(), HError> {
+        self.sender.send(data).map_err(|e| 
+            HError::Message { message: format!("Request send back error:{:?}", e).to_string()
+            }
+        )
+    }
+
 }
 
 /// Response object that can be used to await the result from a worker
@@ -73,6 +78,7 @@ impl <T> RequestWorker<T> {
     }
 }
 
+
 /// Wrapper around MPSC receiver for receiving requests in workers
 pub struct WrokReceiver<T> {
     /// The underlying MPSC receiver
@@ -89,6 +95,15 @@ impl <T> WrokReceiver<T> {
     pub async fn recv_work(&mut self) -> Option<Request<T>> {
         self.receiver.recv().await
     }
+}
+
+///create a channle to communicate with other threads
+pub fn create_channel<T>(capacity: usize) -> 
+    (RequestWorker<T>, WrokReceiver<T>)
+{
+    let (sender, receiver) 
+        = mpsc::channel::<Request<T>>(capacity);   
+    (RequestWorker { sender }, WrokReceiver::new(receiver))
 }
 
 /// A worker that processes requests using a provided function
