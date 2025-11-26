@@ -91,23 +91,45 @@ impl PayloadHandler {
     }
 
     async fn spawn_handler(self,capacity: usize, canc_tokern: CancellationToken) 
-        -> Result<(), HError> 
+        -> Result<RequestWorker<Payload>, HError> 
     {
         let (work_request,mut  work_receiver) 
             = req_resp::create_channel::<Payload>(capacity);
         tokio::spawn(
             async move {
-                let request = work_receiver.recv_work().await;
-                if let Some(req) = request {
-                    let payload = req.data.clone();
-                    let result = self.handle(payload);
+                loop {
+                    tokio::select! {
+                        request = work_receiver.recv_work() => {
+                            if let Some(req) = request {
+                                let payload = req.data.clone();
+                                let result = self.handle(payload);
 
-                    req.send_back(result);
-                    Ok(())
+                                match result {
+                                    Ok(payload) => {
+                                        req.send_back(payload);
+                                    }
+                                    Err(err) => {
+                                        println!("error: {:?}", err);
+                                    }
+                                    
+                                }
+                                    
+                            }else {
+                                // ignore the message, continue the loop
+                                continue;
+                            }
+                        }
+                        _ = canc_tokern.cancelled() => {
+                            //now, we  get a cancellation token, break the loop, end the task
+                            println!("payload handler cancelled");
+                            break;
+                        }
+                    }
+
                 }
             }
         );
-        Ok(())   
+        Ok(work_request)   
     }
 
 }
@@ -115,7 +137,7 @@ impl PayloadHandler {
 impl Handler for PayloadHandler {
     fn handle(&self, payload: Payload) -> Result<Payload,HError> {   
         //get the payload type
-        let payload_type = PayloadTypes::from_payload(payload);
+        let payload_type = PayloadTypes::from_payload(&payload);
 
         //the result of this function
         let result;
@@ -135,4 +157,56 @@ impl Handler for PayloadHandler {
     }
 }
 
+mod tests {
+    use std::thread::sleep;
+
+    use super::*;
+
+    use crate::herrors::HError;
+    use crate::network::{Payload, Message};
+    use crate::req_resp::{Request, Response, RequestWorker};
+
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_payload_handler() {
+        // create a new payload handler
+        let mut handler = PayloadHandler::new();
+
+        //create a handler function
+        let handle = 
+            |payload| -> Result<Payload, HError> {
+                println!("we got  payload");
+                Ok(payload)
+            };
+        
+        // register the handler, ignore the result
+        let _ = handler.reg(PayloadTypes::Empty, handle);
+        
+        //create a canncellation token for the handler task.
+        let canc_token = CancellationToken::new();
+
+        // spawn the handler task, get the request_worker for communication
+        let woker_result = 
+            handler.spawn_handler(1, canc_token.clone()).await;
+        assert_eq!(woker_result.is_ok(), true );
+        let request_worker = woker_result.unwrap();
+
+        // sleep for a while, make sure the handler task is running
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        // make a request to the handler task
+        let response_result = 
+            Request::send(Payload::Empty, request_worker.clone()).await;
+        assert_eq!(response_result.is_ok(), true);
+
+        //wait for the response
+        let response = response_result.unwrap();
+        let payload_result = response.response().await;
+        assert_eq!(payload_result.is_ok(), true);
+        let payload = payload_result.unwrap();
+        assert_eq!(payload, Payload::Empty);
+    }
+
+        
+}
 

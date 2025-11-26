@@ -32,12 +32,13 @@ impl <T> Request<T> {
         Ok(response)
     }
 
+    /// -------------- this function may have a bug ------------------
     /// This is a way to send a response back to the requestor or the client, 
     /// if the server get the request from a client and wants to send a response data
     /// back to the client.
-    pub fn send_back(&self, data: T) -> Result<(), HError> {
-        self.sender.send(data).map_err(|e| 
-            HError::Message { message: format!("Request send back error:{:?}", e).to_string()
+    pub fn send_back(self, data: T) -> Result<(), HError> {
+        self.sender.send(data).map_err(|_| 
+            HError::Message { message: format!("Request send back error" ).to_string()
             }
         )
     }
