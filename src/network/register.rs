@@ -1,7 +1,8 @@
 
-use std::collections::HashMap;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
+use std::pin::Pin;
 
 use crate::herrors;
 use crate::herrors::HError;
@@ -12,7 +13,7 @@ use crate::req_resp::{self, Request, RequestWorker, Response, Worker, WrokReceiv
 ///The enum Payload we use in the network, may carry different types of data.
 ///In order to avoid dealing with data, we use this enum to describe the payload type.
 #[derive(Eq, Hash, PartialEq, Debug)]
-enum PayloadTypes {
+pub enum PayloadTypes {
     Introduce,
     Empty,
     Others,
@@ -32,6 +33,91 @@ impl PayloadTypes {
     }
 
 }
+
+#[async_trait]
+pub trait AsyncHandler{
+    async fn handle(
+        &self,
+        payload: Payload,
+    ) -> Result<Payload, HError>;
+
+    async fn reg_async
+    (
+        &mut self, 
+        payload_type: PayloadTypes,
+        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send + Sync>,
+    ) -> Result<(), HError>;
+
+}
+
+///a register for async handlers
+pub struct AsyncRegister
+{
+    handlers: HashMap<
+        PayloadTypes,
+        Box<
+            dyn Fn(Payload) -> Pin<Box<dyn Future<Output = Result<Payload, HError> > + Send >>
+            + Send 
+            + Sync
+        >
+    >,
+}
+
+
+impl AsyncRegister {
+    fn new() -> Self {
+        Self {
+            handlers: HashMap::new(),
+        }
+    }
+
+
+
+pub struct AsyncPayloadHandler {
+    register: AsyncRegister,  
+}
+
+#[async_trait]
+impl AsyncHandler for AsyncPayloadHandler {
+    async fn handle(&self, payload: Payload)
+        -> Result<Payload, HError> 
+    {
+        let payload_type = PayloadTypes::from_payload(&payload);
+        if let Some(handler) = 
+            self.register.handlers.get(&payload_type)
+        {
+            //return the result
+            handler(payload).await
+        }else {
+            // return error: NotFound
+            Err(
+                HError::Message{
+                    message: format!("no handler for payload type")
+                }
+            )
+        } 
+    }
+
+
+    fn reg_async(
+        &mut self,
+        payload_type: PayloadTypes,
+        handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send>,
+    ) -> Result<(),HError>
+    {
+        let handler_pinned = 
+            move |handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send>|
+            {
+                Box::pin(handler)
+            };
+        self.register.handlers.insert(payload_type, handler_pinned);
+        Ok(())
+    }
+}
+}
+
+
+
 
 
 ///this is a register for handlers to deal with different payloads.
@@ -61,11 +147,51 @@ impl Register {
     }
 }
 
+pub struct HandlerContext {
+    pub request_wokers: HashMap<PayloadTypes, RequestWorker<Payload>>,
+}
+
+impl HandlerContext {
+    pub fn new() -> Self {
+        Self {
+            request_wokers: HashMap::new(),
+        }
+    }
+
+    pub fn get_request_worker(
+        &self,
+        payload_type: PayloadTypes,
+    ) -> Option<RequestWorker<Payload>> {
+        self.request_wokers.get(&payload_type).cloned()
+    }
+
+    async fn send(
+        &self, 
+        payload: Payload,
+    ) -> Result<Response<Payload>, HError>  
+    {
+        let payload_type = PayloadTypes::from_payload(&payload);
+        if let Some(req_worker) = self.get_request_worker(payload_type)
+        {
+            Request::send(payload, req_worker).await
+        }else {
+            Err(
+                HError::Message{
+                    message: format!("no request worker for payload type")
+                }
+            )
+        }
+
+    }
+    
+
+}
+
 
 ///a handler of payload
 pub trait Handler {
     ///get payload type then call the realted handler to handle the payload
-    fn handle(&self, payload: Payload) -> Result<Payload,HError>;
+    fn handle(&self, payload: Payload) -> Result<Payload, HError>;
 }    
 
 ///the hadnler to deal with payload in network
@@ -84,7 +210,7 @@ impl PayloadHandler {
     pub fn reg(
         &mut self, 
         payload_type: PayloadTypes, 
-        handler: fn(Payload) -> Result<Payload,HError>
+        handler:fn(Payload) -> Result<Payload,HError>
     ) -> Result<(),HError> 
     {
         self.register.reg(payload_type, handler)
@@ -106,7 +232,7 @@ impl PayloadHandler {
 
                                 match result {
                                     Ok(payload) => {
-                                        req.send_back(payload);
+                                        let _= req.send_back(payload);
                                     }
                                     Err(err) => {
                                         println!("error: {:?}", err);
@@ -178,10 +304,18 @@ mod tests {
                 println!("we got  payload");
                 Ok(payload)
             };
+        let async_handle = 
+            |payload: Payload|  async move 
+            {
+                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                    println!("we got  payload");
+                    Ok::<Payload, HError>(payload)
+            };
         
         // register the handler, ignore the result
         let _ = handler.reg(PayloadTypes::Empty, handle);
-        
+        let _ = handler.reg(PayloadTypes::Others, async_handle);
+
         //create a canncellation token for the handler task.
         let canc_token = CancellationToken::new();
 
@@ -205,6 +339,8 @@ mod tests {
         assert_eq!(payload_result.is_ok(), true);
         let payload = payload_result.unwrap();
         assert_eq!(payload, Payload::Empty);
+        
+
     }
 
         

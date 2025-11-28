@@ -179,6 +179,15 @@ pub enum Payload
     IntroduceResp(NodeInfo),
 }
 
+impl Payload {
+    ///extract payload from a message. This will CONSUME the Message.
+    #[inline]
+    pub fn from(msg: Message) -> Payload {
+        msg.payload
+    }
+}
+
+
 #[derive(Debug, Clone, Decode, Encode, PartialEq)]
 pub struct RequestInfo {
     src_addr: String,
