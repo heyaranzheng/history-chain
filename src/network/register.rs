@@ -41,11 +41,11 @@ pub trait AsyncHandler{
         payload: Payload,
     ) -> Result<Payload, HError>;
 
-    async fn reg_async
+    fn reg_async
     (
         &mut self, 
         payload_type: PayloadTypes,
-        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send + Sync>,
+        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send >,
     ) -> Result<(), HError>;
 
 }
@@ -70,7 +70,7 @@ impl AsyncRegister {
             handlers: HashMap::new(),
         }
     }
-
+}
 
 
 pub struct AsyncPayloadHandler {
@@ -98,22 +98,22 @@ impl AsyncHandler for AsyncPayloadHandler {
         } 
     }
 
-
-    fn reg_async(
-        &mut self,
+    fn reg_async
+    (
+        &mut self, 
         payload_type: PayloadTypes,
-        handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send>,
-    ) -> Result<(),HError>
+        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send >,
+    ) -> Result<(), HError> 
     {
         let handler_pinned = 
-            move |handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send>|
-            {
-                Box::pin(handler)
-            };
-        self.register.handlers.insert(payload_type, handler_pinned);
+            move |payload: Payload| {
+                Pin::from(async_handler(payload))
+        };
+        let box_handler_pinned = Box::new(handler_pinned);
+        self.register.handlers.insert(payload_type, box_handler_pinned);
         Ok(())
     }
-}
+
 }
 
 
