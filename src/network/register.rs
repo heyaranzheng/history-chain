@@ -143,7 +143,9 @@ impl AsyncHandler for AsyncPayloadHandler {
             async move {
                 loop {
                     tokio::select! {
+                        //listen the requests
                         request = request_reciver.recv_work() => {
+                            //if get a request, get the payload, call the handler,
                             if let Some(req) = request {
                                 let payload = req.data.clone();
                                 let payload_result = self.handle(payload).await;
@@ -157,6 +159,8 @@ impl AsyncHandler for AsyncPayloadHandler {
                                 continue;
                             }
                         }
+                        //listen the cancellation token. 
+                        //if get a cancellation token, break the loop.
                         _ = canc_token.cancelled() => {
                             println!("cancelled");
                             break;
@@ -274,17 +278,26 @@ impl PayloadHandler {
     async fn spawn_handler(self,capacity: usize, canc_tokern: CancellationToken) 
         -> Result<RequestWorker<Payload>, HError> 
     {
+        //create a new request worker for client to create new requests.
+        //create a new reciever for new task (the handler task) to listen the requests.
         let (work_request,mut  work_receiver) 
             = req_resp::create_channel::<Payload>(capacity);
+
+        //spawn a task to handle the payload
         tokio::spawn(
             async move {
+                //listen the requests until get a cancellation token.
                 loop {
                     tokio::select! {
+                        //listen the requests
                         request = work_receiver.recv_work() => {
+                            //if get a request, get the payload, call the handler,
+                            //then send the response back.
                             if let Some(req) = request {
                                 let payload = req.data.clone();
                                 let result = self.handle(payload);
 
+                                //send the response back to the client who send this request.
                                 match result {
                                     Ok(payload) => {
                                         let _= req.send_back(payload);
