@@ -41,13 +41,15 @@ pub trait AsyncHandler{
         payload: Payload,
     ) -> Result<Payload, HError>;
 
-    fn reg_async
-    (
-        &mut self, 
-        payload_type: PayloadTypes,
-        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send >,
-    ) -> Result<(), HError>;
-
+    fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F) 
+        -> Result<(), HError>
+    where F: Fn(Payload) -> Fut + Send + Sync + 'static,
+          Fut: Future<Output = Result<Payload, HError>> + Send + Sync + 'static;
+    async fn spawn_run(
+        self,
+        capacity: usize,
+        canc_token: CancellationToken,
+    ) -> Result<RequestWorker<Payload>, HError>;
 }
 
 ///a register for async handlers
@@ -77,6 +79,14 @@ pub struct AsyncPayloadHandler {
     register: AsyncRegister,  
 }
 
+impl AsyncPayloadHandler {
+    pub fn new() -> Self {
+        Self {
+            register: AsyncRegister::new(),
+        }
+    }
+}
+
 #[async_trait]
 impl AsyncHandler for AsyncPayloadHandler {
     async fn handle(&self, payload: Payload)
@@ -98,20 +108,65 @@ impl AsyncHandler for AsyncPayloadHandler {
         } 
     }
 
-    fn reg_async
-    (
-        &mut self, 
-        payload_type: PayloadTypes,
-        async_handler: fn(Payload) -> Box<dyn Future<Output = Result<Payload, HError>> + Send >,
-    ) -> Result<(), HError> 
+    fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F)
+        -> Result<(), HError>
+    where F: Fn(Payload) -> Fut + Send + Sync + 'static,
+          Fut: Future<Output = Result<Payload, HError>> + Send + Sync + 'static,
     {
-        let handler_pinned = 
+        let box_pinned_handler = Box::new(
             move |payload: Payload| {
-                Pin::from(async_handler(payload))
-        };
-        let box_handler_pinned = Box::new(handler_pinned);
-        self.register.handlers.insert(payload_type, box_handler_pinned);
+                Box::pin(async_handler(payload)) 
+                as Pin<Box<dyn Future<Output = Result<Payload, HError>> + Send>>
+        
+            })
+          as Box<
+            dyn Fn(Payload) -> Pin<Box<dyn Future<Output = Result<Payload, HError> > + Send >>
+            + Send 
+            + Sync
+        >; 
+       
+        self.register.handlers.insert(payload_type, box_pinned_handler);
         Ok(())
+    }
+
+    async fn spawn_run(
+        self,
+        capacity: usize,
+        canc_token: CancellationToken,
+    ) -> Result<RequestWorker<Payload>, HError> 
+    {
+        let (request_worker, mut request_reciver) 
+            = req_resp::create_channel::<Payload>(capacity);
+        
+        //spawn a task to handle the payload
+        tokio::spawn(
+            async move {
+                loop {
+                    tokio::select! {
+                        request = request_reciver.recv_work() => {
+                            if let Some(req) = request {
+                                let payload = req.data.clone();
+                                let payload_result = self.handle(payload).await;
+                                if let Ok(payload) = payload_result {
+                                    let _ =req.send_back(payload);
+                                }else {
+                                    println!("error in handle payload");
+                                }
+                            }else {
+                                println!("bad request");
+                                continue;
+                            }
+                        }
+                        _ = canc_token.cancelled() => {
+                            println!("cancelled");
+                            break;
+                        }
+                    }
+                }
+            }
+
+        );
+        Ok(request_worker)
     }
 
 }
@@ -288,6 +343,7 @@ mod tests {
 
     use super::*;
 
+    use crate::fpsc::new;
     use crate::herrors::HError;
     use crate::network::{Payload, Message};
     use crate::req_resp::{Request, Response, RequestWorker};
@@ -303,18 +359,10 @@ mod tests {
             |payload| -> Result<Payload, HError> {
                 println!("we got  payload");
                 Ok(payload)
-            };
-        let async_handle = 
-            |payload: Payload|  async move 
-            {
-                    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                    println!("we got  payload");
-                    Ok::<Payload, HError>(payload)
-            };
+            };       
         
         // register the handler, ignore the result
         let _ = handler.reg(PayloadTypes::Empty, handle);
-        let _ = handler.reg(PayloadTypes::Others, async_handle);
 
         //create a canncellation token for the handler task.
         let canc_token = CancellationToken::new();
@@ -342,6 +390,55 @@ mod tests {
         
 
     }
+
+    
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_async_payload_handler() {
+        //create a new payload handler
+        let mut handler = AsyncPayloadHandler::new();
+        let async_handle = 
+            |payload| 
+                async {
+                tokio::time::sleep(std::time::Duration::from_micros(1000)).await;
+                println!("we got  payload");
+                Ok::<Payload, HError>(payload)
+            }
+            
+        ;
+        
+                // register the handler, ignore the result
+        let _ = handler.reg_async(PayloadTypes::Empty, async_handle);
+
+        //create a canncellation token for the handler task.
+        let canc_token = CancellationToken::new();
+
+        // spawn the handler task, get the request_worker for communication
+        let request_worker_result = 
+            handler.spawn_run(1, canc_token).await;
+        assert_eq!(request_worker_result.is_ok(), true);
+        let request_worker = request_worker_result.unwrap();
+
+        // sleep for a while, make sure the handler task is running
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        // make a request to the handler task
+        let result = 
+            Request::send(Payload::Empty, request_worker.clone()).await;
+        assert_eq!(result.is_ok(), true);
+        let response = result.unwrap();
+        
+        //wait for the response
+        let payload_result = response.response().await;
+        assert_eq!(payload_result.is_ok(), true);
+        let payload = payload_result.unwrap();
+        assert_eq!(payload, Payload::Empty);
+
+
+    }
+
+
+        
 
         
 }
