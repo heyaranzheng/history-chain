@@ -12,6 +12,14 @@ use crate::req_resp::{self, Request, RequestWorker, Response, Worker, WrokReceiv
 ///this enum is used to describe the payload type, 
 ///The enum Payload we use in the network, may carry different types of data.
 ///In order to avoid dealing with data, we use this enum to describe the payload type.
+///We can get the payloadtype from the Payload by using the 
+/// PayloadTypes::from_payload() method.
+/// # Example:
+///     let payload_type = PayloadTypes::from_payload(&payload);
+/// 
+/// # Note:
+///     * The PayloadTypes is used to classify the handlers for different payloads.
+///     * So the Payloadtypes may NOT have a one-to-one correspondence with the enum Payload.
 #[derive(Eq, Hash, PartialEq, Debug)]
 pub enum PayloadTypes {
     Introduce,
@@ -20,6 +28,7 @@ pub enum PayloadTypes {
 }
 
 impl PayloadTypes {
+    ///return a PayloadTypes from a Payload
     fn from_payload(payload: &Payload) -> Self {
         match payload {
             Payload::Introduce => PayloadTypes::Introduce,
@@ -34,6 +43,9 @@ impl PayloadTypes {
 
 }
 
+/// This trait is used to define the interface of a async handler,
+/// which save the handlers to deal with different kinds of payloads in the Message
+/// type.
 #[async_trait]
 pub trait AsyncHandler{
     async fn handle(
@@ -41,10 +53,34 @@ pub trait AsyncHandler{
         payload: Payload,
     ) -> Result<Payload, HError>;
 
+    /// register a async handler for a specific payload type.
     fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F) 
         -> Result<(), HError>
     where F: Fn(Payload) -> Fut + Send + Sync + 'static,
           Fut: Future<Output = Result<Payload, HError>> + Send + Sync + 'static;
+    
+    /// spawn a task to deal with the payload by async_handlers.
+    /// The task will listen the requests created with the request_worker.
+    /// 
+    /// This function will consume the AsyncHandler, so we can't add more async_handlers
+    /// after we spawning the task.
+    /// # Arguments
+    /// * `capacity` - the capacity of the channel used to communicate with the task.
+    /// * `canc_token` - the cancellation token used to stop the task.
+    /// # Returns
+    /// * `RequestWorker<Payload>` - the request_worker used to create and send requests 
+    /// to the task. 
+    /// 
+    /// # Example
+    ///     //create a new task to handle the payload. 
+    ///     let request_worker = self.spawn_run(100, cancellation_token).await?;  
+    ///     // use the request_worker and your payload data to create a request and send 
+    ///     //the it to the task we spawned.
+    ///     let resp = Request::send(payload, request_worker)?; 
+    ///     // get the response from the dealing task.
+    ///     let payload = resp.recv().await?; 
+    /// 
+    /// the client will get the payload from the dealing task's response.
     async fn spawn_run(
         self,
         capacity: usize,
@@ -52,7 +88,8 @@ pub trait AsyncHandler{
     ) -> Result<RequestWorker<Payload>, HError>;
 }
 
-///a register for async handlers
+/// a register for async handlers.
+/// 
 pub struct AsyncRegister
 {
     handlers: HashMap<
@@ -246,14 +283,27 @@ impl HandlerContext {
 
 }
 
-
-///a handler of payload
-pub trait Handler {
-    ///get payload type then call the realted handler to handle the payload
+#[async_trait]
+pub trait SyncHandler {
     fn handle(&self, payload: Payload) -> Result<Payload, HError>;
-}    
+    fn reg(
+        &mut self, 
+        payload_type: PayloadTypes, 
+        handler:fn(Payload) -> Result<Payload,HError>
+    ) -> Result<(),HError>;
 
-///the hadnler to deal with payload in network
+    async fn spawn_run(
+        self,
+        capacity: usize,
+        canc_token: CancellationToken,
+    )-> Result<RequestWorker<Payload>, HError>;
+    
+}
+
+
+/// the hadnler to deal with payload in network
+/// This handler only use sync handler to deal with the payloads.
+/// If you wwant to use an async handler, you should use the AsyncPayloadHandler.
 pub struct PayloadHandler {
     register: Register,
 }
@@ -265,8 +315,13 @@ impl PayloadHandler {
         }
     }
 
+}
+
+#[async_trait]
+impl SyncHandler for PayloadHandler {
+
     #[inline]
-    pub fn reg(
+    fn reg(
         &mut self, 
         payload_type: PayloadTypes, 
         handler:fn(Payload) -> Result<Payload,HError>
@@ -275,7 +330,9 @@ impl PayloadHandler {
         self.register.reg(payload_type, handler)
     }
 
-    async fn spawn_handler(self,capacity: usize, canc_tokern: CancellationToken) 
+    /// spawn a task to deal with the payload with sync handler.
+    /// 
+    async fn spawn_run(self,capacity: usize, canc_token: CancellationToken) 
         -> Result<RequestWorker<Payload>, HError> 
     {
         //create a new request worker for client to create new requests.
@@ -313,7 +370,7 @@ impl PayloadHandler {
                                 continue;
                             }
                         }
-                        _ = canc_tokern.cancelled() => {
+                        _ = canc_token.cancelled() => {
                             //now, we  get a cancellation token, break the loop, end the task
                             println!("payload handler cancelled");
                             break;
@@ -324,11 +381,9 @@ impl PayloadHandler {
             }
         );
         Ok(work_request)   
+
     }
 
-}
-
-impl Handler for PayloadHandler {
     fn handle(&self, payload: Payload) -> Result<Payload,HError> {   
         //get the payload type
         let payload_type = PayloadTypes::from_payload(&payload);
@@ -350,6 +405,8 @@ impl Handler for PayloadHandler {
         return result;
     }
 }
+
+
 
 mod tests {
     use std::thread::sleep;
@@ -382,7 +439,7 @@ mod tests {
 
         // spawn the handler task, get the request_worker for communication
         let woker_result = 
-            handler.spawn_handler(1, canc_token.clone()).await;
+            handler.spawn_run(1, canc_token.clone()).await;
         assert_eq!(woker_result.is_ok(), true );
         let request_worker = woker_result.unwrap();
 
