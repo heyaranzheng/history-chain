@@ -26,38 +26,71 @@ use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
 /// Node B, not the whole network's perspective.
 #[derive(Debug, Clone, PartialEq, Decode, Encode)]
 pub struct NodeInfo {
-    name: HashValue,
+    ///the node's name, it is the public key of the node's identity
+    pub name: Option<HashValue>,
     /// Node can have serveral usual addresses for connecting to the node,
     ///if we can't connect to the node by any of these addresses, we can try to connect to some 
     ///server to get the node's current address, if the node is in the network now.
-    address: Vec<SocketAddr>,
+    pub address: Option<Vec<SocketAddr>>,
     ///the caller, if we can't use those addresses to connect to the node, we can ask the caller
-    caller: NodeName,
+    pub caller: Option<HashValue>,
     ///the node's reputation for this instance's owner, not for whole the network.
-    reputation: Reputation,
-    ///the last time the node was connected to the network, in seconds.
-    last_conn: u64,
-    ///the state of last connection
-    last_state: NodeState,
-    ///the number of times the node has been connected to the network
-    meeting_count: u32,
-    ///the successful conections rate of the node by the way using addresses
-    conn_rate: f32,
-    ///who introduced this node to me？
-    introducer: NodeName,
+    pub reputation: Option<Reputation>,
 
+    // -------------private fields--------------
+    
+    ///the last time the node was connected to the network, in seconds.
+    last_conn:  Option<u64>,
+    ///the state of last connection
+    last_state: Option<NodeState>,
+    ///the number of times the node has been connected to the network
+    meeting_count: Option<u32>,
+    ///the successful conections rate of the node by the way using addresses
+    conn_rate: Option<f32>,
+    ///who introduced this node to me？
+    introducer: Option<HashValue>,
 }
 
+impl NodeInfo {
+    pub fn new() -> Self {
+        NodeInfo {
+            name: None,
+            address: None,
+            caller: None,
+            reputation: None,
+            last_conn: None,
+            last_state: None,
+            meeting_count: None,
+            conn_rate: None,
+            introducer: None,
+        }
+    }
+}
 
-
-#[async_trait]
-pub trait Node: UdpConnection{       
+///Private trait for Node, it is used to operate the node's private fields,
+/// especially for the sign_handle and nodeinfo.
+trait NodeAppend {
+    ///set node's nodeinfo
+    fn set_nodeinfo(&mut self, nodeinfo: NodeInfo);
+    ///set node's sign_handle
+    fn set_sign_handle(&mut self, sign_handle: SignHandle);
+    ///get node's sign_handle
+    fn sign_handle(&self) -> &SignHandle;
     ///get node's name
     fn name(&self) -> HashValue;
     ///get node's address
     fn address(&self) -> SocketAddr;
     ///get node's friends
     fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
+}
+
+
+#[async_trait]
+pub trait Node: UdpConnection + Sized + NodeAppend{       
+    
+    ///create a new node
+    fn new() -> Self;
+   
 
     ///Default Implmentation:
     ///check if the node is a friend 
@@ -65,10 +98,32 @@ pub trait Node: UdpConnection{
         self.friends().contains_key(&name)
     }
 
+    /// Default Implmentation:
+    /// Initialize a new node 
+    async fn init_new() -> Result<Self, HError>   {
+        let mut node = Self::new();
+        let id = Identity::new();
+        let name = id.public_key_to_bytes();
+
+        //create a new spwan_blocking task to handle the sign request
+        let sign_handle = SignHandle::new(id).await?;
+        node.set_sign_handle(sign_handle);
+
+        let mut node_info= NodeInfo::new();
+        node_info.name = Some(name);
+        node.set_nodeinfo(node_info);
+
+        Ok(node)    
+    }
+
+    ///Default Implmentation: 
+    //async fn sign_msg(&self, msg: u8) -> Result<[u8; 64], HError> 
+    
+    
     ///Default Implmentation:
     ///get a firend's info 
     fn get(&self, name: HashValue) -> Option<NodeInfo>{
-        let info = self.friends().get(&name);
+       let info = self.friends().get(&name);
         if let Some(info) = info {
             Some(info.clone())
         } else {
@@ -186,10 +241,13 @@ type NodeName = HashValue;
 
 mod tests {
     use super::*;
+    use crate::nodes::identity::{SignHandle, SignRequest, Identity};
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_udp() {
-    
+    async fn test_udp() {     
+        let identity = Identity::new();
+        let sign_handle = identity.sign_handle();
+
     }
 }
 

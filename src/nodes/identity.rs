@@ -11,6 +11,11 @@ use crate::herrors::HError;
 use crate::hash::HashValue;
 use crate::network::Message;
 
+use crate::req_resp::{Request, Response, RequestWorker, WrokReceiver};
+
+
+
+
 
 ///request to sign a message
 pub struct SignRequest {
@@ -27,7 +32,7 @@ unsafe impl Sync for SignRequest {}
 pub struct SignHandle {
     public_key_bytes: [u8; 32],
     sender: Sender<SignRequest>,
-}
+    }
 
 impl SignHandle {
     //create a new thread to handle the signing affairs
@@ -44,6 +49,7 @@ impl SignHandle {
         let tx_clone = tx.clone();
 
         let public_key_bytes = id.public_key_to_bytes();
+        //spawn a thread to handle the signing requests
         tokio::task::spawn_blocking( move || {
             while let Some(requset) = rx.blocking_recv() {
                 let signature = id.sign_msg(&requset.bytes_vec.as_slice());
@@ -57,6 +63,11 @@ impl SignHandle {
         })
         
     }
+
+    ///send a sign_request to the signer
+    /// # Arguments
+    /// * `sign_request` - the sign_request to send
+    /// return a Result<(), HError>
     pub async fn send(&self, sign_request: SignRequest) -> Result<(), HError>
     {
         self.sender.send(sign_request).await
@@ -102,13 +113,17 @@ impl SignHandle {
 }
 
 
-///An identity is a public key and a secret key
+/// This is the identity of a node in the network, it contains a public key and a 
+/// secret key. It is unique in the network. 
+/// * The public_key is used as a node's name and verifications in the network.
+/// * The secret_key is used to sign messages.
 pub struct Identity{
     pub public_key: VerifyingKey,
     secret_key: Option<SigningKey>,
 }
 
 impl Identity {
+    /// a helper function for Identity::new()
     fn create_keypair() -> (VerifyingKey, SigningKey) {
         let mut csprng = OsRng;
         let secret_key = SigningKey::generate(&mut csprng);
@@ -117,7 +132,8 @@ impl Identity {
         (public_key, secret_key)
     }
 
-    ///create a new identity
+    ///create a new identity.
+    /// This is the only way to create a new identity
     pub fn new() -> Self {
         let (public_key, secret_key) = Self::create_keypair();
         Identity {
@@ -143,7 +159,14 @@ impl Identity {
         self.public_key.to_bytes()
     }
 
-    ///verify the signature 
+    /// verify the signature.
+    /// If you want to verify a signature, all you need is 
+    /// 1. the signated data, 2. the public key to verify, 3. the signature to verify.
+    /// # Arguments
+    /// * `data` - the data to verify
+    /// * `public_key` - the public key to verify
+    /// * `signature` - the signature to verify
+    /// return a Result<(), HError>
     #[inline]
     pub fn verify_signature_bytes(
         data: &[u8], 
@@ -161,9 +184,7 @@ impl Identity {
                 )?;
         public_key.verify(data, &signature)
             .map_err(|e| HError::Identity { message: {format!("verify signature error: {}", e)} })
-    }
-
-    
+    }   
 
 }
 
