@@ -184,6 +184,7 @@ pub trait UdpConnection: Send + Sync {
 mod tests {
     use sqlx::encode;
     use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
     use super::*;
     use crate::constants::{ZERO_HASH, MAX_UDP_MSG_SIZE};
     use crate::network::{Message, Payload};
@@ -196,7 +197,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_network() {
         let  encode_id = Identity::new();
-        let signal_handle = SignHandle::new(encode_id).await.unwrap();
+        let signal_handle = 
+            SignHandle::spawn_new(encode_id, 32, CancellationToken::new()).await.unwrap();
         let decode_id = Identity::new();
 
         let msg = Message::new(
@@ -352,7 +354,8 @@ mod tests {
         let server_name = server_id.public_key.to_bytes();
         let client_name = client_id.public_key.to_bytes();
         let server_name_clone = server_name.clone();
-        let sign_handle = SignHandle::new(client_id).await.unwrap();
+        let sign_handle =
+            SignHandle::spawn_new(client_id, 32, CancellationToken::new()).await.unwrap();
 
 
         //create a timeout server to response the check message

@@ -66,7 +66,7 @@ impl SignHandle {
     /// //then you can use the handle to sign messages
     /// let signature = handle.sign(b"hello world").await?;
     /// ````
-    async fn spawn_new(mut identity: Identity, capacity: usize, cancel_token: CancellationToken) -> 
+    pub async fn spawn_new(mut identity: Identity, capacity: usize, cancel_token: CancellationToken) -> 
         Result<SignHandle, HError> {
         let (tx, mut rx) = 
             mpsc::channel::<SignRequest>(capacity);
@@ -114,40 +114,7 @@ impl SignHandle {
 
     }
 
-
-
-    ///create a new thread to handle the signing affairs
-    /// # Note:
-    ///  Use Identity::spawn_new() instead of this function.
-    async fn new(id: Identity) -> Result<Self, HError> {
-        //this function init_signer() just create a new thread to handle the signing
-        //so the await will NOT block the main thread
-        SignHandle::init_signer(id).await
-    }
-
-    ///initialize a singer for the identity this
-    /// # Note:
-    ///  Use Identity::spawn_new() instead of this function.
-    async fn init_signer(mut id: Identity) -> Result<SignHandle, HError>{ 
-        let (tx, mut rx) = 
-            mpsc::channel::<SignRequest>(64);
-        let tx_clone = tx.clone();
-
-        let public_key_bytes = id.public_key_to_bytes();
-        //spawn a thread to handle the signing requests
-        tokio::task::spawn_blocking( move || {
-            while let Some(requset) = rx.blocking_recv() {
-                let signature = id.sign_msg(&requset.bytes_vec.as_slice());
-                let _ = requset.response.send(signature);
-            }
-        });
-
-        Ok(SignHandle {
-            public_key_bytes,
-            sender: tx_clone 
-        })
-        
-    }
+   
     ///send a sign_request to the signer
     /// # Arguments
     /// * `sign_request` - the sign_request to send
@@ -316,9 +283,10 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn  test_singer() {
+    async fn  test_signer() {
         let id = Identity::new();
-        let handle = SignHandle::new(id).await.unwrap();
+        let handle = 
+            SignHandle::spawn_new(id, 32, CancellationToken::new()).await.unwrap();
         let public_key = handle.public_key_bytes();
 
         let handle_clone = handle.clone();
@@ -358,20 +326,7 @@ mod tests {
         
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_sgin_handle_sign() {
-        let id = Identity::new();
-        let handle = SignHandle::new(id).await.unwrap();
-        let public_key = handle.public_key_bytes();
-
-        let msg = b"hello world";
-        let signature = handle.sign(msg).await.unwrap();
-        let result =Identity::verify_signature_bytes(
-            msg, 
-            &public_key, 
-            &signature);
-        assert_eq!(result.is_ok(), true);
-    }
+  
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_spawn_new() {

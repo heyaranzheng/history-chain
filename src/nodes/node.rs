@@ -4,6 +4,7 @@ use std::net::{SocketAddr, Ipv4Addr};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 
 use crate::block::{Block, Carrier, Digester};
@@ -168,14 +169,14 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     }
 
     /// Default Implmentation:
-    /// Initialize a new node 
-    async fn init_new() -> Result<Self, HError>   {
+    /// Initialize a new node with a cancellation token
+    async fn init_new(cancel_token: CancellationToken) -> Result<Self, HError>   {
         let mut node = Self::new();
         let id = Identity::new();
         let name = id.public_key_to_bytes();
 
         //create a new spwan_blocking task to handle the sign request
-        let sign_handle = SignHandle::new(id).await?;
+        let sign_handle = SignHandle::spawn_new(id, 32, cancel_token).await?;
         node.set_sign_handle(sign_handle);
 
         let mut node_info= NodeInfo::new();
@@ -350,7 +351,8 @@ mod tests {
    
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {     
-        let node = TestNode::init_new().await.unwrap();
+        let cancel_token = CancellationToken::new();
+        let node = TestNode::init_new(cancel_token).await.unwrap();
         
     }
 }

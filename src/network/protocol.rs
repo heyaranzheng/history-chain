@@ -828,8 +828,8 @@ mod tests {
         let decode_id = Identity::new();
 
         //create a signer using the encode_id
-        let handle_result
-             = SignHandle::new(encode_id).await;
+        let handle_result= 
+            SignHandle::spawn_new(encode_id, 32, CancellationToken::new()).await;
         
         //the result should be successful.
         assert_eq!(handle_result.is_ok(), true);
