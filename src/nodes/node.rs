@@ -12,7 +12,7 @@ use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
 use crate::network::{UdpConnection, Message, Payload};
-use crate::nodes::{Identity, identity,SignHandle};
+use crate::nodes::{Identity, SignHandle, SignRequest, identity};
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
 
 
@@ -65,21 +65,89 @@ impl NodeInfo {
             introducer: None,
         }
     }
+    
+    #[inline]
+    pub fn name(&self) -> Result<HashValue, HError> {
+        if let Some(name) = self.name {
+            Ok(name)
+        } else {
+            Err(HError::Message {
+                message: "node name is not set".to_string(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn address(&self) -> Result<Vec<SocketAddr>, HError> {
+        if let Some(address) = self.address.clone() {
+            Ok(address)
+        } else {
+            Err(HError::Message {
+                message: "node address is not set".to_string(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn caller(&self) -> Result<HashValue, HError> {
+        if let Some(caller) = self.caller {
+            Ok(caller)
+        } else {
+            Err(HError::Message {
+                message: "node caller is not set".to_string(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn reputation(&self) -> Result<Reputation, HError> {
+        if let Some(reputation) = self.reputation.clone() {
+            Ok(reputation)
+        } else {
+            Err(HError::Message {
+                message: "node reputation is not set".to_string(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn last_conn(&self) -> Result<u64, HError> {
+        if let Some(last_conn) = self.last_conn {
+            Ok(last_conn)
+        } else {
+            Err(HError::Message {
+                message: "node last_conn is not set".to_string(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn last_state(&self) -> Result<NodeState, HError> {
+        if let Some(last_state) = self.last_state.clone() {
+            Ok(last_state)
+        } else {
+            Err(HError::Message {
+                message: "node last_state is not set".to_string(),
+            })
+        }
+    }
+    
 }
 
-///Private trait for Node, it is used to operate the node's private fields,
+///trait for Node, it is used to operate the node's private fields,
 /// especially for the sign_handle and nodeinfo.
-trait NodeAppend {
+pub trait NodeAppend {
+    ///create a new node
+    fn new() -> Self;
     ///set node's nodeinfo
     fn set_nodeinfo(&mut self, nodeinfo: NodeInfo);
+    ///get node's nodeinfo
+    fn nodeinfo(&self) -> &NodeInfo;
     ///set node's sign_handle
     fn set_sign_handle(&mut self, sign_handle: SignHandle);
     ///get node's sign_handle
     fn sign_handle(&self) -> &SignHandle;
-    ///get node's name
-    fn name(&self) -> HashValue;
-    ///get node's address
-    fn address(&self) -> SocketAddr;
+
     ///get node's friends
     fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
 }
@@ -88,8 +156,9 @@ trait NodeAppend {
 #[async_trait]
 pub trait Node: UdpConnection + Sized + NodeAppend{       
     
-    ///create a new node
-    fn new() -> Self;
+    ///Defuault Implmentation:
+    ///sign a message with the node's private key
+  
    
 
     ///Default Implmentation:
@@ -139,6 +208,10 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         timeout_ms: u64, 
         sign_handle: SignHandle,
     ) -> Result<NodeInfo, HError>{
+        //get my name
+        let this_name_info = self.nodeinfo();
+        let this_name = this_name_info.name()?;
+
         //check if the introducer is a friend
         let info = self.get(introducer);
         if info.is_none() {
@@ -147,7 +220,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
 
         //get the introducer's info, and filter out the avaliable addresses of the introducer 
         let introducer_info = info.unwrap();
-        let dst_addr = &introducer_info.address;
+        let dst_addr = &introducer_info.address()?;
 
         let avaliable_addr = 
             Self::check_addresses_available(dst_addr, timeout_ms, introducer, sign_handle.clone()).await?;
@@ -157,8 +230,8 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
 
         //create a message for introducing a new node
         let msg = Message::new(
-            self.name(), 
-            introducer_info.name, 
+            this_name,
+            introducer_info.name()?, 
             Payload::Introduce
         );
 
@@ -174,7 +247,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
             Self::udp_recv_from(&sign_handle.public_key_bytes(), TIME_MS_FOR_UNP_RECV, bind_addr).await?;
         
         //check if the response is valid
-        if src_addr != introducer_info.address[0] {
+        if src_addr != introducer_info.address()?[0] {
             return Err(HError::Message {
                 message: "response is not from the introducer".to_string()});
         }
@@ -198,10 +271,6 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         if self.is_friend(name) {
             return Err(HError::Message {message: "introducer is not your friend".to_string()});
         }
-
-        let msg = Message::new(
-            self.name(), name, Payload::Introduce
-        );
 
         Ok(())
     }
@@ -243,11 +312,46 @@ mod tests {
     use super::*;
     use crate::nodes::identity::{SignHandle, SignRequest, Identity};
 
+    struct TestNode {
+        this_node_info: NodeInfo,
+        sign_handle: Option<SignHandle>,
+        friends: HashMap<HashValue, NodeInfo>,
+    }
+
+    impl NodeAppend for TestNode {
+        fn set_nodeinfo(&mut self, nodeinfo: NodeInfo) {
+            self.this_node_info = nodeinfo;
+        }
+        fn friends(&self) -> &HashMap<HashValue, NodeInfo> {
+            &self.friends
+        }
+        fn nodeinfo(&self) -> &NodeInfo {
+            &self.this_node_info
+        }
+        fn set_sign_handle(&mut self, sign_handle: SignHandle) {
+            self.sign_handle = Some(sign_handle);
+        }
+        fn sign_handle(&self) -> &SignHandle {
+            self.sign_handle.as_ref().unwrap()
+        }
+
+        fn new() -> Self {
+            Self {
+                this_node_info: NodeInfo::new(),
+                sign_handle: None,
+                friends: HashMap::new(),
+            }
+        }
+    
+    }
+
+    impl UdpConnection for TestNode {}
+    impl Node for TestNode {}
+   
     #[tokio::test(flavor = "multi_thread")]
     async fn test_udp() {     
-        let identity = Identity::new();
-        let sign_handle = identity.sign_handle();
-
+        let node = TestNode::init_new().await.unwrap();
+        
     }
 }
 
