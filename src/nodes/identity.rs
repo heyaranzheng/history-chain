@@ -23,7 +23,7 @@ impl SignRequest {
     ///# Arguments
     /// * `bytes_vec` - the bytes to sign 
     /// * `response` - the oneshot channel to send the result
-
+    /// returns a new sign request
     fn new(bytes_vec: Vec<u8>, response: oneshot::Sender<Result<[u8; 64], HError>>) -> Self {
         SignRequest {
             bytes_vec,
@@ -33,13 +33,23 @@ impl SignRequest {
 
 }
 
-
-
 unsafe impl Send for SignRequest {}
 unsafe impl Sync for SignRequest {}
 
 
-
+///A handle to sign messages
+/// # Fields
+/// * `public_key_bytes` - the public key bytes of the identity
+/// * `sender` - a tokio::sync::mpsc channel to send the sign requests to the signer task
+/// # Example
+/// ```
+/// let id = Identity::new();
+/// //create a new task to handle the Signing requests, this will cusume the id,
+/// //with a 64 capacity channel and a cancellation token.
+/// let handle = Signhandle::spawn_new(id, 32, cancel_token).await?;
+/// //then you can use the handle to sign messages
+/// let signature = handle.sign(b"hello world").await?;
+/// ```
 #[derive(Clone)]
 pub struct SignHandle {
     public_key_bytes: [u8; 32],
@@ -151,6 +161,7 @@ impl SignHandle {
     /// let handle = SignHandle::new(id).await?;
     /// //sign a message
     /// let signature = handle.sign(b"hello world").await?
+    /// ```
     pub async fn sign(&self, bytes: &[u8]) -> 
         Result<[u8; 64], HError>
     {
@@ -284,6 +295,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn  test_signer() {
+
         let id = Identity::new();
         let handle = 
             SignHandle::spawn_new(id, 32, CancellationToken::new()).await.unwrap();

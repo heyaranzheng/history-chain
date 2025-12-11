@@ -27,3 +27,7 @@ pub const MTU_SIZE: usize = 1500; // 1500 bytes
 pub const MAX_CONNECTIONS: usize= 100; // maximum number of  tcp connections
 pub const UDP_CHECK_PORT: u16 = 7070;
 pub const TIME_MS_FOR_UNP_RECV: u64 = 500; // 0.5 second
+
+
+// the capacity of the tokio's mpsc channel or oneshot channel
+pub const CHANNEL_CAPACITY: usize = 64;

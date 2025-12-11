@@ -143,29 +143,59 @@ pub trait NodeAppend {
     ///set node's nodeinfo
     fn set_nodeinfo(&mut self, nodeinfo: NodeInfo);
     ///get node's nodeinfo
-    fn nodeinfo(&self) -> &NodeInfo;
+    fn nodeinfo(&self) -> Result<&NodeInfo, HError>;
     ///set node's sign_handle
     fn set_sign_handle(&mut self, sign_handle: SignHandle);
     ///get node's sign_handle
-    fn sign_handle(&self) -> &SignHandle;
-
+    fn sign_handle(&self) -> Result<&SignHandle, HError>;
     ///get node's friends
-    fn friends(&self) -> &HashMap<HashValue, NodeInfo>;
+    fn friends(&self) -> Result<&HashMap<HashValue, NodeInfo>, HError>;
 }
 
 
+use crate::constants::CHANNEL_CAPACITY;
 #[async_trait]
 pub trait Node: UdpConnection + Sized + NodeAppend{       
     
     ///Defuault Implmentation:
+    ///start the node's sign_handle task
+    ///# Arguments
+    /// * `cancel_token` - the cancellation token for the sign_handle task
+    /// * `id` - the identity of the node, the id will be consumed to create the sign_handle
+    /// # Example
+    /// ```
+    /// let sign_handle = node.start_sign_handle(cancel_token, id).await?;
+    /// ```
+    async fn start_sign_handle(&mut self, cancel_token: CancellationToken, id: Identity)
+        -> Result<(), HError> {
+        //create a new sign_handle
+        let sign_handle = 
+            SignHandle::spawn_new(id, CHANNEL_CAPACITY, cancel_token).await?;
+        self.set_sign_handle(sign_handle);
+        Ok(())
+    }
+
+    ///Default Implmentation:
     ///sign a message with the node's private key
+    /// # Arguments
+    /// * 'msg' - &[u8], the message to be signed.
+    /// # Example
+    /// ```
+    /// let signature = node.sign(msg).await?;
+    /// ```
+    async fn sign(&self, msg: &[u8]) -> Result<[u8; 64], HError> {
+        let sign_handle_ref = self.sign_handle()?;
+        let sig = sign_handle_ref.sign(msg).await?;
+        Ok(sig)
+    }
   
    
 
     ///Default Implmentation:
     ///check if the node is a friend 
-    fn is_friend(&self, name: HashValue) -> bool{
-        self.friends().contains_key(&name)
+    fn is_friend(&self, name: HashValue) -> Result<bool,HError> {
+        let friends = self.friends()?;
+        Ok(friends.contains_key(&name))
     }
 
     /// Default Implmentation:
@@ -192,13 +222,19 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     
     ///Default Implmentation:
     ///get a firend's info 
-    fn get(&self, name: HashValue) -> Option<NodeInfo>{
-       let info = self.friends().get(&name);
-        if let Some(info) = info {
-            Some(info.clone())
+    fn get(&self, name: HashValue) -> Option<NodeInfo> {
+        if let Ok(friends) = self.friends() {
+            //this node has a friends list
+            if let Some(info) = friends.get(&name) {
+                return Some(info.clone());
+            }
+            //have no friend named  "name"
+            return None;
         } else {
+            //this node has no friends list
             None
         }
+       
     }
     
     ///Default Implmentation:
@@ -210,7 +246,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         sign_handle: SignHandle,
     ) -> Result<NodeInfo, HError>{
         //get my name
-        let this_name_info = self.nodeinfo();
+        let this_name_info = self.nodeinfo()?;
         let this_name = this_name_info.name()?;
 
         //check if the introducer is a friend
@@ -268,11 +304,18 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     ///Default Implmentation:
     ///send a message to one of node's friend for introducing a new node
     async fn make_friend(&self, name: HashValue) -> Result<(), HError>{
-        //check if the introducer is a friend. If not, return error
-        if self.is_friend(name) {
-            return Err(HError::Message {message: "introducer is not your friend".to_string()});
+        //check if the introducer is a friend. If not, return error.
+        if let Err(e) = self.is_friend(name) {
+            return Err(e);
         }
 
+        //--------------------------------
+        //do something
+
+
+
+
+        //--------------------------------
         Ok(())
     }
 }
@@ -323,17 +366,21 @@ mod tests {
         fn set_nodeinfo(&mut self, nodeinfo: NodeInfo) {
             self.this_node_info = nodeinfo;
         }
-        fn friends(&self) -> &HashMap<HashValue, NodeInfo> {
-            &self.friends
+        fn friends(&self) -> Result<&HashMap<HashValue, NodeInfo>, HError> {
+            Ok(&self.friends)
         }
-        fn nodeinfo(&self) -> &NodeInfo {
-            &self.this_node_info
+        fn nodeinfo(&self) -> Result<&NodeInfo, HError> {
+            Ok(&self.this_node_info)
         }
         fn set_sign_handle(&mut self, sign_handle: SignHandle) {
             self.sign_handle = Some(sign_handle);
         }
-        fn sign_handle(&self) -> &SignHandle {
-            self.sign_handle.as_ref().unwrap()
+        fn sign_handle(&self) -> Result<&SignHandle, HError> {
+            if let Some(handle) = &self.sign_handle {
+                Ok(handle)
+            }else {
+                Err(HError::Message {message: "sign_handle is not set".to_string()})
+            }
         }
 
         fn new() -> Self {
@@ -353,6 +400,8 @@ mod tests {
     async fn test_udp() {     
         let cancel_token = CancellationToken::new();
         let node = TestNode::init_new(cancel_token).await.unwrap();
+        let id = Identity::new();
+
         
     }
 }
