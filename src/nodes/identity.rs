@@ -120,9 +120,23 @@ impl SignHandle {
             public_key_bytes,
             sender: tx_clone 
         })
-        
-
     }
+        
+        /// use sign_handle to verify a message's signature
+        /// # Arguments
+        /// * `message` - the message to verify, &[u8]
+        /// * `signature` - the signature to verify, [u8; 64]
+        /// return a Result<(), HError>
+        /// # Example
+        /// ```
+        /// let result = sign_handle.verify(message, signature);
+        /// ```
+        pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> Result<(), HError> 
+        {
+            //just use the method of verify_signature_bytes in Identity
+            Identity::verify_signature_bytes(message, &self.public_key_bytes, signature)
+        }
+    
 
    
     ///send a sign_request to the signer

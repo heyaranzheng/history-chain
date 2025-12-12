@@ -397,11 +397,20 @@ mod tests {
     impl Node for TestNode {}
    
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_udp() {     
+async fn test_start_sign_handle() {     
         let cancel_token = CancellationToken::new();
-        let node = TestNode::init_new(cancel_token).await.unwrap();
+        let mut node = TestNode::init_new(cancel_token.clone()).await.unwrap();
         let id = Identity::new();
+        
+        //bind a task to handle the sign request
+        let result = node.start_sign_handle(cancel_token.clone(), id).await;
+        assert!(result.is_ok());
 
+        //sign a message then verify it
+        let msg = b"hello world";
+        let signature = node.sign(msg).await.unwrap();
+        let result = node.sign_handle().unwrap().verify(msg, &signature);
+        assert!(result.is_ok());
         
     }
 }
