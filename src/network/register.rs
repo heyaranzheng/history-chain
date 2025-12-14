@@ -29,7 +29,7 @@ pub enum PayloadTypes {
 
 impl PayloadTypes {
     ///return a PayloadTypes from a Payload
-    fn from_payload(payload: &Payload) -> Self {
+    pub fn from_payload(payload: &Payload) -> Self {
         match payload {
             Payload::Introduce => PayloadTypes::Introduce,
             Payload::Empty => PayloadTypes::Empty,
@@ -87,6 +87,9 @@ pub trait AsyncHandler{
         canc_token: CancellationToken,
     ) -> Result<RequestWorker<Payload>, HError>;
 }
+
+
+
 
 /// a register for async handlers.
 /// 

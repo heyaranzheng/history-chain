@@ -1,19 +1,18 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::net::{SocketAddr, Ipv4Addr};
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 
+use crate::network::{AsyncRegister, AsyncHandler,AsyncPayloadHandler}; 
 use crate::block::{Block, Carrier, Digester};
 use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
 use crate::herrors::HError;
 use crate::network::{UdpConnection, Message, Payload};
-use crate::nodes::{Identity, SignHandle, SignRequest, identity};
+use crate::nodes::{Identity, SignHandle };
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
 
 
@@ -154,6 +153,7 @@ pub trait NodeAppend {
 
 
 use crate::constants::CHANNEL_CAPACITY;
+use crate::req_resp::RequestWorker;
 #[async_trait]
 pub trait Node: UdpConnection + Sized + NodeAppend{       
     
@@ -178,7 +178,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     ///Default Implmentation:
     ///sign a message with the node's private key
     /// # Arguments
-    /// * 'msg' - &[u8], the message to be signed.
+    /// * 'msg' -the message to be signed.
     /// # Example
     /// ```
     /// let signature = node.sign(msg).await?;
@@ -216,9 +216,60 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         Ok(node)    
     }
 
-    ///Default Implmentation: 
-    //async fn sign_msg(&self, msg: u8) -> Result<[u8; 64], HError> 
-    
+    ///Default Implementation:
+    /// 
+    /// When a message is received from the network:
+    ///  1. verify the message's signature
+    ///  2. get the payload from the message
+    ///  3. chose a handler to handle the payload, generate a response payload
+    ///  4. sign the response message with the node's private key, then send back
+    ///     to the network.
+    /// This function creates a task to listen to the network
+    pub async fn listen_and_handle_message(
+        &self,
+        cancel_token: CancellationToken,
+    ) -> Result<(), HError> {
+        let my_info = self.nodeinfo()?;
+        let my_name = my_info.name()?;
+        let my_addr = my_info.address()?;
+
+        //clone the sign_handle, so the new task can sign a message
+        let sign_handle = self.sign_handle()?.clone();
+
+        let task = async move {
+            loop {
+                tokio::select! {
+                    // if we get a cancellation signal, break out of the loop
+                    _ = cancel_token.cancelled() => {
+                        break;
+                    }
+                    // if we get a message from the network, we create a task
+                    // to handle the message
+                    msg = UdpConnection::udp_recv_from(
+                        my_name,
+                        constants::TIME_MS_FOR_UNP_RECV,
+                        my_addr,
+                    ) => {
+                        //create a new task to handle the message    
+                        
+                    }
+                }
+            }
+        };
+
+        tokio::spawn(task);
+        Ok(())
+    }
+
+    ///Default Implmentation:
+    ///add a friend to the node's friends list
+    fn add(&mut self, name: HashValue, info: NodeInfo) -> Result<(), HError> {
+        let friends = self.friends()?;
+        friends.insert(name, info);
+        Ok(())
+
+    }
+
     
     ///Default Implmentation:
     ///get a firend's info 
@@ -320,6 +371,51 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     }
 }
 
+///this module contains some helper functions for the Node trait
+mod helpers {
+    use super::*;
+    use crate::constants::MAX_MSG_SIZE;
+    use crate::nodes::SignHandle;
+    use crate::req_resp::{Request, RequestWorker, Response};
+    use crate::herrors::HError;
+
+    ///create a new task to verify the message.
+    /// 
+    async fn msg_delivery(
+        msg: Message, 
+        sign_handle: &SignHandle,
+        request_worker: RequestWorker<Payload>,
+        response_worker: RequestWorker<(Vec<u8>, SocketAddr)>,
+        addr: SocketAddr,
+    ) -> Result<(), HError> 
+    {
+        //send the message which we got from the network to the specific task,
+        //we will get a new payload to generate a response message for the original
+        //message that from the net.
+        let payload = msg.payload;
+        let response = Request::send(payload,  request_worker).await?;
+        let new_payload = response.response().await?;
+
+
+        //create a new message with this payload
+        let new_reciver = msg.sender;
+        let new_sender = msg.receiver;
+        let new_msg = Message::new(new_sender, new_reciver, new_payload);
+        
+        //enocde the message (this will signated the message and add a header)
+        let mut msg_encoded_byte = vec![0u8; MAX_MSG_SIZE]; 
+        let msg_size = new_msg.encode(sign_handle, &mut msg_encoded_byte).await?;
+
+        //truncate the vec
+        msg_encoded_byte.truncate(msg_size);
+
+        //send back the msg_byte to the response worker, that worker will send 
+        //the message to the tartget.
+        let _ = Request::send((msg_encoded_byte, addr), response_worker).await?;
+
+        Ok(())
+    } 
+}
 
 ///The reputaion of the node in the network.
 #[derive(Debug, Clone, PartialEq, Decode, Encode)]

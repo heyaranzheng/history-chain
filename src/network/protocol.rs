@@ -562,7 +562,7 @@ impl Message {
     ///the header with the signature is added to the buffer's head.
     ///the encoded message is followed after the header bytes.
     ///the return value is the total size of the encoded header and and message.
-    pub async fn encode(&self, sign_handle: SignHandle, buffer: &mut [u8] )
+    pub async fn encode(&self, sign_handle: &SignHandle, buffer: &mut [u8] )
         -> Result<usize, HError>
     {
          //check buffer size
@@ -843,7 +843,7 @@ mod tests {
         );
         let mut buffer = vec![0u8; 10240];
         let msg_bytes_size_result = 
-            msg.encode(sign_handle, &mut buffer[..]).await;
+            msg.encode(&sign_handle, &mut buffer[..]).await;
         
         //the encode and sign process should be successful.
         assert_eq!(msg_bytes_size_result.is_ok(), true);

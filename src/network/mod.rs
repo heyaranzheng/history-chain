@@ -7,5 +7,6 @@ mod protocol;
 mod register;
 
 pub use udp::UdpConnection;
+pub use register::{AsyncHandler, AsyncRegister, AsyncPayloadHandler, PayloadTypes};
 pub use protocol::*;
 

@@ -62,6 +62,7 @@ impl <T> Response<T> {
 }
 
 /// Wrapper around MPSC sender for sending requests to workers
+/// 
 #[derive(Clone)]
 pub struct RequestWorker<T> {
     /// The underlying MPSC sender
