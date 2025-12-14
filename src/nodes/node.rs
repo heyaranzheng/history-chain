@@ -379,8 +379,14 @@ mod helpers {
     use crate::req_resp::{Request, RequestWorker, Response};
     use crate::herrors::HError;
 
-    ///create a new task to verify the message.
-    /// 
+    ///this function is the helper to deliver the message between the tasks
+    /// 1. send the request message to the handler, by the request_worker,
+    ///     wait for the result.
+    /// 2. use the result to create a new message, in this process, the new
+    ///     message will be encoded, signed, and add a header, it will be a 
+    ///     real message can be transfered in the network.
+    /// 3. deliver the msg_bytes and the target address to a sending task, which
+    ///     will send the msg_bytes to the target address.
     async fn msg_delivery(
         msg: Message, 
         sign_handle: &SignHandle,
