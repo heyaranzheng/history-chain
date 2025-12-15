@@ -97,9 +97,48 @@ impl <T> WrokReceiver<T> {
     pub async fn recv_work(&mut self) -> Option<Request<T>> {
         self.receiver.recv().await
     }
+
+    /// receieve a work request from the channel, then extract the data from it
+    pub async fn recv_data(&mut self) -> Result<T, HError> {
+        let option = self.recv_work().await;
+        if let Some(req) = option {
+            Ok(req.data)
+        }
+        else {
+            Err(
+                HError::Message { 
+                    message: format!("request handler recviece a invalid request")
+                }
+            )
+        }
+    }
 }
 
-///create a channle to communicate with other threads
+///create a channle to communicate with other tasks
+/// # Arguments
+/// * `capacity` the queue's capacity of the channel
+///# Example
+/// ```
+/// struct DataType;
+/// let request_worker = spawn( async {
+///     let (request_worker, work_reciever) = create_channel::<DataType>(1);
+///     let data_result = work_reciever.recv_data().awiat;
+///     match data_result {
+///         Ok(value) => {
+///             //do something
+///         }
+///         Err(e) => {
+///             logger_error_with_error(&e);
+///         }   
+///     }
+/// });
+/// //use request_worker to create a Requst
+/// let data = DataType
+/// let resp = Request::send(data, request_worker).awiat?;
+/// .....
+/// 
+/// ```
+/// 
 pub fn create_channel<T>(capacity: usize) -> 
     (RequestWorker<T>, WrokReceiver<T>)
 {

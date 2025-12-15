@@ -66,7 +66,7 @@ pub trait UdpConnection: Send + Sync {
     async fn udp_send_to(
         dst_addr: SocketAddr, 
         msg: &Message,
-        sign_handle: SignHandle,
+        sign_handle: &SignHandle,
     ) -> Result<usize, HError> 
         where Self: Send + Sync
     

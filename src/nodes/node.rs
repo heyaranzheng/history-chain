@@ -326,7 +326,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         &self,
         addr: SocketAddr,
         cancel_token: CancellationToken,
-    ) -> RequestWorker<(Vec<u8>, SocketAddr), HError> 
+    ) -> Result<RequestWorker<(Vec<u8>, SocketAddr)>, HError> 
     {
         //get a bind_addr 
         let this_nodeinf = self.nodeinfo()?;
@@ -342,7 +342,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         //just use the 1st address in the bind_addresses vector
         let bind_addr = bind_addrs[0].clone();
 
-        let (request_worker, worke_receiver) = 
+        let (request_worker, work_receiver) = 
             req_resp::create_channel::<(Vec<u8>, SocketAddr)>(CHANNEL_CAPACITY);
         let task = async move {
             loop {
@@ -352,10 +352,19 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
                         break;
                     }
 
-                    (vec_bytes, addr) = work_receiver.recv_work() => {
+                    recv_result = work_receiver.recv_data() => {
                         //use the udp_connection methods
-                        let result = Self::udp_send_to(dst_addr, msg, sign_handle).await;
-                    };
+                        match recv_result {
+                            Err(e) => {
+                                //we got a invalid message, print the error then ignore it.
+                                logger_error_with_error(&e);
+                                continue;
+                            }  
+                            Ok((vec_bytes, dest_addr)) => {
+                                let result = Self::udp_send_to(dest_addr, vec_bytes, sign_handle).await;
+                            }
+                        }
+                    }
                 }   
             }
         };
