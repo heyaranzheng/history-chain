@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, Ipv4Addr};
+use std::os::unix::net::SocketAddr;
+use std::thread::spawn;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use tokio_util::sync::CancellationToken;
@@ -10,10 +12,11 @@ use crate::block::{Block, Carrier, Digester};
 use crate::executor::{Executor, ChainExecutor};
 use crate::archive::Archiver;
 use crate::hash:: HashValue;
-use crate::herrors::HError;
+use crate::herrors::{HError, logger_error, logger_error_with_error};
 use crate::network::{UdpConnection, Message, Payload};
 use crate::nodes::{Identity, SignHandle };
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
+use crate::req_resp::{RequestWorker, WrokReceiver};
 
 
 
@@ -149,11 +152,13 @@ pub trait NodeAppend {
     fn sign_handle(&self) -> Result<&SignHandle, HError>;
     ///get node's friends
     fn friends(&self) -> Result<&HashMap<HashValue, NodeInfo>, HError>;
+    ///the node must have an AsyncPayloadHandler to handle the message
+    fn async_payload_handler(&self) -> Result<AsyncPayloadHandler, HError>;
 }
 
 
 use crate::constants::CHANNEL_CAPACITY;
-use crate::req_resp::RequestWorker;
+use crate::req_resp::{self, RequestWorker};
 #[async_trait]
 pub trait Node: UdpConnection + Sized + NodeAppend{       
     
@@ -224,14 +229,24 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     ///  3. chose a handler to handle the payload, generate a response payload
     ///  4. sign the response message with the node's private key, then send back
     ///     to the network.
-    /// This function creates a task to listen to the network
-    pub async fn listen_and_handle_message(
+    /// This function creates a task to deliver the message to its next step task.
+    /// # Arguments
+    /// * `request_worker` - the worker to handle the request 
+    /// * `response_worker` - the worker to send the response  back to the network
+    /// * `cancel_token` - the cancellation token for the task
+    /// 
+    async fn spawn_deliver_message_task(
         &self,
+        request_worker: RequestWorker<Payload>,
+        response_worker: RequestWorker<(Vec<u8>, SocketAddr)>,
         cancel_token: CancellationToken,
     ) -> Result<(), HError> {
         let my_info = self.nodeinfo()?;
         let my_name = my_info.name()?;
-        let my_addr = my_info.address()?;
+        let bind_addrs = my_info.address()?;
+        
+        //Note: I just use the 1st address as a bind_addr for now.
+        let bind_addr = bind_addrs[0].clone();
 
         //clone the sign_handle, so the new task can sign a message
         let sign_handle = self.sign_handle()?.clone();
@@ -245,13 +260,30 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
                     }
                     // if we get a message from the network, we create a task
                     // to handle the message
-                    msg = UdpConnection::udp_recv_from(
-                        my_name,
-                        constants::TIME_MS_FOR_UNP_RECV,
-                        my_addr,
+                    result = Self::udp_recv_from(
+                        &my_name,
+                        TIME_MS_FOR_UNP_RECV,
+                        bind_addr,
                     ) => {
-                        //create a new task to handle the message    
-                        
+                        match result {
+                            //it's an error message
+                            Err(e) => {
+                                logger_error_with_error(e);
+                                break;
+                            }
+                            //It's an message not an error
+                            Ok((msg, request_addr)) => {
+                                //create a new task to handle the message, don't wait for the result.
+                                tokio::spawn(
+                                    helpers::msg_delivery(
+                                        msg, &sign_handle, 
+                                        request_worker.clone(), 
+                                        response_worker.clone(), 
+                                        request_addr
+                                    )
+                                );   
+                            }
+                        }
                     }
                 }
             }
@@ -260,16 +292,88 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         tokio::spawn(task);
         Ok(())
     }
+        
+    ///use the async_payload_handler to spawn new task to deal with 
+    /// the request message's payload
+    /// 
+    /// # Returns
+    /// * `Result<RequestWorker<Payload>, HError>` - we can create a Request with your
+    /// Payload and this worker to this handler task.
+    /// 
+    /// # Example
+    /// ```
+    /// let request_worker = self.spawn_payload_handler_task.await?;
+    /// let resp = Request::send(your_payload, requests_handler).await?;
+    /// let returned_payload = resp.response().await?;
+    /// ```
+
+    async fn spawn_payload_handler_task(
+        &self,
+        cancel_token: CancellationToken,
+    ) -> Result<RequestWorker<Payload>, HError>
+    {
+        //get the async_payload_handler from the node
+        let async_payload_handler 
+            = self.async_payload_handler()?;
+        async_payload_handler.spawn_run(CHANNEL_CAPACITY, cancel_token)
+            .await
+    }
+
+
+    /// Default Implmentation: 
+    /// create a new task for sending the messages into network.
+    async fn spawn_send_to_network_task(
+        &self,
+        addr: SocketAddr,
+        cancel_token: CancellationToken,
+    ) -> RequestWorker<(Vec<u8>, SocketAddr), HError> 
+    {
+        //get a bind_addr 
+        let this_nodeinf = self.nodeinfo()?;
+        let bind_addrs = this_nodeinf.address?;
+        if bind_addrs.len() == 0 {
+            return Err(
+                HError::NetWork { message: 
+                    format!("this node have no bind address in the node's nodeinfo") 
+                }
+            );
+        }
+        
+        //just use the 1st address in the bind_addresses vector
+        let bind_addr = bind_addrs[0].clone();
+
+        let (request_worker, worke_receiver) = 
+            req_resp::create_channel::<(Vec<u8>, SocketAddr)>(CHANNEL_CAPACITY);
+        let task = async move {
+            loop {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        //break out of the loop
+                        break;
+                    }
+
+                    (vec_bytes, addr) = work_receiver.recv_work() => {
+                        //use the udp_connection methods
+                        let result = Self::udp_send_to(dst_addr, msg, sign_handle).await;
+                    };
+                }   
+            }
+        };
+        tokio::spawn(task);
+        Ok(request_worker)
+    }
+
 
     ///Default Implmentation:
     ///add a friend to the node's friends list
+    /* 
     fn add(&mut self, name: HashValue, info: NodeInfo) -> Result<(), HError> {
         let friends = self.friends()?;
         friends.insert(name, info);
         Ok(())
 
     }
-
+    */
     
     ///Default Implmentation:
     ///get a firend's info 
@@ -376,8 +480,9 @@ mod helpers {
     use super::*;
     use crate::constants::MAX_MSG_SIZE;
     use crate::nodes::SignHandle;
-    use crate::req_resp::{Request, RequestWorker, Response};
+    use crate::req_resp::{Request, RequestWorker};
     use crate::herrors::HError;
+
 
     ///this function is the helper to deliver the message between the tasks
     /// 1. send the request message to the handler, by the request_worker,
@@ -387,7 +492,7 @@ mod helpers {
     ///     real message can be transfered in the network.
     /// 3. deliver the msg_bytes and the target address to a sending task, which
     ///     will send the msg_bytes to the target address.
-    async fn msg_delivery(
+    pub async fn msg_delivery(
         msg: Message, 
         sign_handle: &SignHandle,
         request_worker: RequestWorker<Payload>,

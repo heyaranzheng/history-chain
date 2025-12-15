@@ -114,7 +114,7 @@ impl AsyncRegister {
     }
 }
 
-
+#[derive(Clone)]
 pub struct AsyncPayloadHandler {
     register: AsyncRegister,  
 }
