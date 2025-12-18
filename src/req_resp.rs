@@ -114,39 +114,6 @@ impl <T> WorkReceiver<T> {
     }
 }
 
-///create a channle to communicate with other tasks
-/// # Arguments
-/// * `capacity` the queue's capacity of the channel
-///# Example
-/// ```
-/// struct DataType;
-/// let request_worker = spawn( async {
-///     let (request_worker, work_reciever) = create_channel::<DataType>(1);
-///     let data_result = work_reciever.recv_data().await;
-///     match data_result {
-///         Ok(value) => {
-///             //do something
-///         }
-///         Err(e) => {
-///             logger_error_with_error(&e);
-///         }
-///     }
-/// });
-/// //use request_worker to create a Requst
-/// let data = DataType
-/// let resp = Request::send(data, request_worker).await?;
-/// .....
-/// 
-/// ```
-/// 
-pub fn create_channel<T>(capacity: usize) -> 
-    (RequestWorker<T>, WorkReceiver<T>)
-{
-    let (sender, receiver) 
-        = mpsc::channel::<Request<T>>(capacity);   
-    (RequestWorker { sender }, WorkReceiver::new(receiver))
-}
-
 /// A worker that processes requests using a provided function
 pub struct Worker<T> {
     /// Sender for sending new requests to this worker
@@ -234,6 +201,42 @@ impl <T> Worker<T>
         Ok(())
     }
 }
+
+
+
+///create a channle to communicate with other tasks
+/// # Arguments
+/// * `capacity` the queue's capacity of the channel
+///# Example
+/// ```
+/// struct DataType;
+/// let request_worker = spawn( async {
+///     let (request_worker, work_reciever) = create_channel::<DataType>(1);
+///     let data_result = work_reciever.recv_data().await;
+///     match data_result {
+///         Ok(value) => {
+///             //do something
+///         }
+///         Err(e) => {
+///             logger_error_with_error(&e);
+///         }
+///     }
+/// });
+/// //use request_worker to create a Requst
+/// let data = DataType
+/// let resp = Request::send(data, request_worker).await?;
+/// .....
+/// 
+/// ```
+/// 
+pub fn create_channel<T>(capacity: usize) -> 
+    (RequestWorker<T>, WorkReceiver<T>)
+{
+    let (sender, receiver) 
+        = mpsc::channel::<Request<T>>(capacity);   
+    (RequestWorker { sender }, WorkReceiver::new(receiver))
+}
+
 
 #[cfg(test)]
 mod test{

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, Ipv4Addr};
 use std::os::unix::net::SocketAddr;
+use std::sync::Arc;
 use std::thread::spawn;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -16,7 +17,7 @@ use crate::herrors::{HError, logger_error, logger_error_with_error};
 use crate::network::{UdpConnection, Message, Payload};
 use crate::nodes::{Identity, SignHandle };
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
-use crate::req_resp::{RequestWorker, WrokReceiver};
+use crate::req_resp::{RequestWorker, WorkReceiver, create_channel};
 
 
 
@@ -237,8 +238,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// 
     async fn spawn_deliver_message_task(
         &self,
-        request_worker: RequestWorker<Payload>,
-        response_worker: RequestWorker<(Vec<u8>, SocketAddr)>,
+        payload_worker: RequestWorker<(Message, SocketAddr)>,
         cancel_token: CancellationToken,
     ) -> Result<(), HError> {
         let my_info = self.nodeinfo()?;
@@ -273,15 +273,11 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
                             }
                             //It's an message not an error
                             Ok((msg, request_addr)) => {
-                                //create a new task to handle the message, don't wait for the result.
-                                tokio::spawn(
-                                    helpers::msg_delivery(
-                                        msg, &sign_handle, 
-                                        request_worker.clone(), 
-                                        response_worker.clone(), 
-                                        request_addr
-                                    )
-                                );   
+                                //send the message to the next processing task.
+                                let result = Request::send(
+                                    (msg, request_addr), 
+                                    payload_worker.clone()
+                                ).await;
                             }
                         }
                     }
@@ -306,7 +302,6 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// let resp = Request::send(your_payload, requests_handler).await?;
     /// let returned_payload = resp.response().await?;
     /// ```
-
     async fn spawn_payload_handler_task(
         &self,
         cancel_token: CancellationToken,
@@ -317,6 +312,48 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
             = self.async_payload_handler()?;
         async_payload_handler.spawn_run(CHANNEL_CAPACITY, cancel_token)
             .await
+    }
+
+
+    /// spawn a task to handle when we a message just. If the reuslt of 
+    /// the handle is Ok, then send it to a signing task
+    async fn spwan_hanler_task(
+        &self,
+        cance_token: CancellationToken,
+    ) -> Result<RequestWorker<(Message, SocketAddr)>, HError> 
+    {
+        //get the signing task's request_worker
+        let sign_handler = self.sign_handle()?.clone();
+        let (request_worker, work_receiver) 
+            = create_channel::<(Message, SocketAddr)>(CHANNEL_CAPACITY);
+   
+        let task = async move {
+            loop {
+                //wait for a request
+                msg_addr_result = work_receiver.recv_data().await;
+                match msg_addr_result {
+                    Err(e) => {
+                        logger_error_with_error(e);
+                        continue;
+                    }
+                    Ok((msg, request_addr)) => {
+                        //process the request 
+                        
+
+                        //send the message to the next processing task.
+                        let result = Request::send(
+                            (msg, request_addr), 
+                            sign_handler.clone()
+                        ).await;
+                    }
+                }
+
+            }
+        };
+
+                
+        
+
     }
 
 
@@ -501,6 +538,7 @@ mod helpers {
     ///     real message can be transfered in the network.
     /// 3. deliver the msg_bytes and the target address to a sending task, which
     ///     will send the msg_bytes to the target address.
+    /// 
     pub async fn msg_delivery(
         msg: Message, 
         sign_handle: &SignHandle,
@@ -611,7 +649,7 @@ mod tests {
 
     impl UdpConnection for TestNode {}
     impl Node for TestNode {}
-   
+
     #[tokio::test(flavor = "multi_thread")]
 async fn test_start_sign_handle() {     
         let cancel_token = CancellationToken::new();
@@ -627,7 +665,7 @@ async fn test_start_sign_handle() {
         let signature = node.sign(msg).await.unwrap();
         let result = node.sign_handle().unwrap().verify(msg, &signature);
         assert!(result.is_ok());
-        
     }
+
 }
 
