@@ -82,12 +82,12 @@ impl <T> RequestWorker<T> {
 
 
 /// Wrapper around MPSC receiver for receiving requests in workers
-pub struct WrokReceiver<T> {
+pub struct WorkReceiver<T> {
     /// The underlying MPSC receiver
     pub receiver: mpsc::Receiver<Request<T>>,
 }
 
-impl <T> WrokReceiver<T> {
+impl <T> WorkReceiver<T> {
     /// Create a new receiver wrapper
     fn new(receiver: mpsc::Receiver<Request<T>>) -> Self {
         Self { receiver }
@@ -122,29 +122,29 @@ impl <T> WrokReceiver<T> {
 /// struct DataType;
 /// let request_worker = spawn( async {
 ///     let (request_worker, work_reciever) = create_channel::<DataType>(1);
-///     let data_result = work_reciever.recv_data().awiat;
+///     let data_result = work_reciever.recv_data().await;
 ///     match data_result {
 ///         Ok(value) => {
 ///             //do something
 ///         }
 ///         Err(e) => {
 ///             logger_error_with_error(&e);
-///         }   
+///         }
 ///     }
 /// });
 /// //use request_worker to create a Requst
 /// let data = DataType
-/// let resp = Request::send(data, request_worker).awiat?;
+/// let resp = Request::send(data, request_worker).await?;
 /// .....
 /// 
 /// ```
 /// 
 pub fn create_channel<T>(capacity: usize) -> 
-    (RequestWorker<T>, WrokReceiver<T>)
+    (RequestWorker<T>, WorkReceiver<T>)
 {
     let (sender, receiver) 
         = mpsc::channel::<Request<T>>(capacity);   
-    (RequestWorker { sender }, WrokReceiver::new(receiver))
+    (RequestWorker { sender }, WorkReceiver::new(receiver))
 }
 
 /// A worker that processes requests using a provided function
@@ -152,7 +152,7 @@ pub struct Worker<T> {
     /// Sender for sending new requests to this worker
     sender: RequestWorker<T>,
     /// Receiver for receiving requests to process
-    receiver: WrokReceiver<T>,
+    receiver: WorkReceiver<T>,
     /// The function used to process incoming requests
     task: fn(T) -> Result<T, HError>,
 }
@@ -171,7 +171,7 @@ impl <T> Worker<T>
     ) -> Self  {
         let (sender, receiver) = mpsc::channel::<Request<T>>(capacity);
         let sender = RequestWorker { sender };
-        let receiver = WrokReceiver::new(receiver);
+        let receiver = WorkReceiver::new(receiver);
         
         Self {
             sender,

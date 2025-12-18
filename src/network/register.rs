@@ -1,13 +1,15 @@
 
+use std::sync::Arc;
 use async_trait::async_trait;
 use std::collections::HashMap;
+use std::os::unix::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
 use std::pin::Pin;
 
 use crate::herrors;
 use crate::herrors::HError;
-use crate::network::Payload;
-use crate::req_resp::{self, Request, RequestWorker, Response, Worker, WrokReceiver};
+use crate::network::{Message, Payload};
+use crate::req_resp::{self, Request, RequestWorker, Response, Worker, WorkReceiver};
 
 ///this enum is used to describe the payload type, 
 ///The enum Payload we use in the network, may carry different types of data.
@@ -20,7 +22,7 @@ use crate::req_resp::{self, Request, RequestWorker, Response, Worker, WrokReceiv
 /// # Note:
 ///     * The PayloadTypes is used to classify the handlers for different payloads.
 ///     * So the Payloadtypes may NOT have a one-to-one correspondence with the enum Payload.
-#[derive(Eq, Hash, PartialEq, Debug)]
+#[derive(Eq, Hash, PartialEq, Debug, Clone)]
 pub enum PayloadTypes {
     Introduce,
     Empty,
@@ -52,6 +54,19 @@ pub trait AsyncHandler{
         &self,
         payload: Payload,
     ) -> Result<Payload, HError>;
+
+    /// spawn a task to handle a network message once, if it is ok, then send it
+    /// to a signing task to sign the message.
+    /// # Arguments
+    /// * `msg_addr` -it's a (Message, SocketAddr) tuple, the address is the sender's
+    /// address in the network.
+    /// * `sign_worker` -it's the RequestWorker of the signning task. we can construct a 
+    /// request to the signing task with it.
+    async fn spawn_handle(
+        &self,
+        msg_addr: (Message, SocketAddr),
+        sign_worker: RequestWorker<(Message, SocketAddr)>,
+    ) -> Result<(), HError>;
 
     /// register a async handler for a specific payload type.
     fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F) 
@@ -95,26 +110,25 @@ pub trait AsyncHandler{
 /// 
 pub struct AsyncRegister
 {
-    handlers: HashMap<
+    handlers: Arc<HashMap<
         PayloadTypes,
         Box<
             dyn Fn(Payload) -> Pin<Box<dyn Future<Output = Result<Payload, HError> > + Send >>
             + Send 
             + Sync
-        >
-    >,
+        > 
+    >>,
 }
 
 
 impl AsyncRegister {
     fn new() -> Self {
         Self {
-            handlers: HashMap::new(),
+            handlers: Arc::new(HashMap::new()),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct AsyncPayloadHandler {
     register: AsyncRegister,  
 }
@@ -129,6 +143,8 @@ impl AsyncPayloadHandler {
 
 #[async_trait]
 impl AsyncHandler for AsyncPayloadHandler {
+
+    ///This function will find out the relevent handler to handle the payload
     async fn handle(&self, payload: Payload)
         -> Result<Payload, HError> 
     {
@@ -147,6 +163,29 @@ impl AsyncHandler for AsyncPayloadHandler {
             )
         } 
     }
+    
+    /// handle a message then send it to signing task
+    async fn spawn_handle(
+        &self,
+        msg_addr: (Message, SocketAddr),
+        sign_worker: RequestWorker<(Message, SocketAddr)>,
+    ) -> Result<(), HError> 
+    {
+        let msg = msg_addr.0;
+        let payload = msg.payload.clone();
+        let addr = msg_addr.1;
+        
+        //Note:
+        //The new sender should be setted with the old receiver, the 
+        //new receiver should be setted with the old sender.
+        let new_payload = self.handle(payload).await?;
+        let new_msg = Message::new(msg.receiver, msg.sender, new_payload);
+        Request::send((new_msg, addr), sign_worker).await?;
+        Ok(())
+
+    }
+
+
 
     fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F)
         -> Result<(), HError>
@@ -165,10 +204,12 @@ impl AsyncHandler for AsyncPayloadHandler {
             + Sync
         >; 
        
-        self.register.handlers.insert(payload_type, box_pinned_handler);
+        self.register.handlers.clone().insert(payload_type, box_pinned_handler);
         Ok(())
     }
 
+    /// spawn a new task to handle the payload in some network messages.
+    /// the task will not end until we have got a CancellationToken.
     async fn spawn_run(
         self,
         capacity: usize,
@@ -212,6 +253,8 @@ impl AsyncHandler for AsyncPayloadHandler {
         );
         Ok(request_worker)
     }
+
+
 
 }
 
@@ -339,7 +382,7 @@ impl SyncHandler for PayloadHandler {
         -> Result<RequestWorker<Payload>, HError> 
     {
         //create a new request worker for client to create new requests.
-        //create a new reciever for new task (the handler task) to listen the requests.
+        //create a new reciver for new task (the handler task) to listen the requests.
         let (work_request,mut  work_receiver) 
             = req_resp::create_channel::<Payload>(capacity);
 
