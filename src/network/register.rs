@@ -2,7 +2,7 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::os::unix::net::SocketAddr;
+use std::net::SocketAddr;
 use tokio_util::sync::CancellationToken;
 use std::pin::Pin;
 
@@ -110,21 +110,21 @@ pub trait AsyncHandler{
 /// 
 pub struct AsyncRegister
 {
-    handlers: Arc<HashMap<
+    handlers: HashMap<
         PayloadTypes,
         Box<
             dyn Fn(Payload) -> Pin<Box<dyn Future<Output = Result<Payload, HError> > + Send >>
             + Send 
             + Sync
         > 
-    >>,
+    >,
 }
 
 
 impl AsyncRegister {
     fn new() -> Self {
         Self {
-            handlers: Arc::new(HashMap::new()),
+            handlers: HashMap::new(),
         }
     }
 }
@@ -204,7 +204,7 @@ impl AsyncHandler for AsyncPayloadHandler {
             + Sync
         >; 
        
-        self.register.handlers.clone().insert(payload_type, box_pinned_handler);
+        self.register.handlers.insert(payload_type, box_pinned_handler);
         Ok(())
     }
 

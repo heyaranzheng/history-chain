@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, Ipv4Addr};
-use std::os::unix::net::SocketAddr;
 use std::sync::Arc;
-use std::thread::spawn;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use tokio_util::sync::CancellationToken;
+use tokio::spawn;
 
-
+use crate::constants::CHANNEL_CAPACITY;
 use crate::network::{AsyncRegister, AsyncHandler,AsyncPayloadHandler}; 
 use crate::block::{Block, Carrier, Digester};
 use crate::executor::{Executor, ChainExecutor};
@@ -17,7 +16,7 @@ use crate::herrors::{HError, logger_error, logger_error_with_error};
 use crate::network::{UdpConnection, Message, Payload};
 use crate::nodes::{Identity, SignHandle };
 use crate::constants::{UDP_RECV_PORT, TIME_MS_FOR_UNP_RECV};
-use crate::req_resp::{RequestWorker, WorkReceiver, create_channel};
+use crate::req_resp::{self, RequestWorker, WorkReceiver, create_channel, Request};
 
 
 
@@ -158,8 +157,6 @@ pub trait NodeAppend {
 }
 
 
-use crate::constants::CHANNEL_CAPACITY;
-use crate::req_resp::{self, RequestWorker};
 #[async_trait]
 pub trait Node: UdpConnection + Sized + NodeAppend{       
     
@@ -268,7 +265,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
                         match result {
                             //it's an error message
                             Err(e) => {
-                                logger_error_with_error(e);
+                                logger_error_with_error(&e);
                                 break;
                             }
                             //It's an message not an error
@@ -313,46 +310,90 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         async_payload_handler.spawn_run(CHANNEL_CAPACITY, cancel_token)
             .await
     }
+    
 
-
-    /// spawn a task to handle when we a message just. If the reuslt of 
-    /// the handle is Ok, then send it to a signing task
+    ///Default Implementation:
+    /// Step 2: 
+    ///     find a handler in the AsyncPayloadHandler, then spawn a chiild task to handle it.
+    /// the result of the child task will be sent to the next step task -- encode_and_sign_task
+    /// 
+    /// #Arguments
+    /// *`encode_and_sign_worker` - the RequestWroker  of the next step task
+    /// *`cancel_token` - the cancellation token for the task
+    /// 
+    /// # Returns
+    /// * `Result<RequestWorker<(Message, SocketAddr)>, HError>` - the RequestWorker of this 
+    /// processing task. You can use this worker to construct a Request and send it to  this task.
+    /// # Example
+    /// ```
+    /// let request_worker = self.spawn_hanler_task.await?;
+    /// //we don't send back to requester, so the returns of the Response will not be used. 
+    /// let _ = Request::send(your_payload, requests_handler).await?;
+    /// ```
     async fn spwan_hanler_task(
         &self,
+        encode_and_sign_worker: RequestWorker<(Message, SocketAddr)>,
         cance_token: CancellationToken,
     ) -> Result<RequestWorker<(Message, SocketAddr)>, HError> 
     {
-        //get the signing task's request_worker
-        let sign_handler = self.sign_handle()?.clone();
-        let (request_worker, work_receiver) 
+
+        //get the async_payload_handler from the node, and share it to all the child tasks.
+        let async_payload_handler = self.async_payload_handler()?;
+        let async_payload_handler_share = Arc::new(async_payload_handler);
+
+        let (request_worker, mut work_receiver) 
             = create_channel::<(Message, SocketAddr)>(CHANNEL_CAPACITY);
    
         let task = async move {
             loop {
-                //wait for a request
-                msg_addr_result = work_receiver.recv_data().await;
-                match msg_addr_result {
-                    Err(e) => {
-                        logger_error_with_error(e);
-                        continue;
+                //clone the encode_and_sign_worker, so the new task can send a message
+                let encode_and_sign_worker_clone = encode_and_sign_worker.clone();
+                tokio::select! {
+                    _ = cance_token.cancelled() => {
+                        break;
                     }
-                    Ok((msg, request_addr)) => {
-                        //process the request 
-                        
+               
+                    //wait for a request
+                    msg_addr_result = work_receiver.recv_data() => {
+                        match msg_addr_result {
+                            Err(e) => {
+                                logger_error_with_error(&e);
+                                continue;
+                            }
+                            
+                            Ok((msg, request_addr)) => {
+                                let async_payload_handler_share_clone = 
+                                    async_payload_handler_share.clone();
+            
+                                //create a child task to handle the message, this task just handle the
+                                //message, then send it to the next step task, and finish.
+                                let child_task = async move {
+                                    let msg_addr = (msg, request_addr);
+                                    let result = 
+                                        async_payload_handler_share_clone.spawn_handle(
+                                            msg_addr, 
+                                            encode_and_sign_worker_clone
+                                        ).await;
+                                    //if there is an error, log it.
+                                    if let Err(e) = result {
+                                        logger_error_with_error(&e);
+                                    };
 
-                        //send the message to the next processing task.
-                        let result = Request::send(
-                            (msg, request_addr), 
-                            sign_handler.clone()
-                        ).await;
+                                };
+
+                                //spawn the task, don't wait for it to finish.
+                                tokio::spawn(child_task);
+                            }
+                        }
                     }
                 }
 
             }
         };
-
-                
         
+        //don't  wait for the task to finish, just spawn it.
+        tokio::spawn(task);
+        Ok(request_worker)
 
     }
 
@@ -365,9 +406,12 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         cancel_token: CancellationToken,
     ) -> Result<RequestWorker<(Vec<u8>, SocketAddr)>, HError> 
     {
+        //get the sign_handle from the node
+        let sign_handle = self.sign_handle()?;
+
         //get a bind_addr 
         let this_nodeinf = self.nodeinfo()?;
-        let bind_addrs = this_nodeinf.address?;
+        let bind_addrs = this_nodeinf.address()?;
         if bind_addrs.len() == 0 {
             return Err(
                 HError::NetWork { message: 
@@ -614,6 +658,7 @@ mod tests {
         this_node_info: NodeInfo,
         sign_handle: Option<SignHandle>,
         friends: HashMap<HashValue, NodeInfo>,
+        async_payload_handler: AsyncPayloadHandler,
     }
 
     impl NodeAppend for TestNode {
@@ -636,12 +681,16 @@ mod tests {
                 Err(HError::Message {message: "sign_handle is not set".to_string()})
             }
         }
+        fn async_payload_handler(&self) -> Result<AsyncPayloadHandler, HError> {
+            Ok(self.async_payload_handler.clone())
+        }
 
         fn new() -> Self {
             Self {
                 this_node_info: NodeInfo::new(),
                 sign_handle: None,
                 friends: HashMap::new(),
+                async_payload_handler: AsyncPayloadHandler::new(),
             }
         }
     

@@ -147,7 +147,7 @@ pub trait UdpConnection: Send + Sync {
 
         //create a message and sign it with identity, encode it into a byte array.
         let test_msg = Message::new(*my_name, receiver, Payload::Empty);
-        let total_len = test_msg.encode(sign_handle, &mut buffer[..]).await?;
+        let total_len = test_msg.encode(&sign_handle, &mut buffer[..]).await?;
 
         //create tasks to check if each address is available 
         let tasks = addr_list.iter().map(|addr| {
@@ -213,7 +213,7 @@ mod tests {
             8081
         );
         let send_task = async move {
-            Test::udp_send_to( dst_addr, &msg, signal_handle).await.unwrap();
+            Test::udp_send_to( dst_addr, &msg, &signal_handle).await.unwrap();
         };
 
         
