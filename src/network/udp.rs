@@ -5,11 +5,13 @@ use futures::future::join_all;
 use tokio::net::{UdpSocket};
 use tokio::task::spawn;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
-use crate::constants::{
+use crate::req_resp::{RequestWorker, Request, create_channel};
+use crate::constants::{ CHANNEL_CAPACITY,
     MAX_MSG_SIZE, MAX_UDP_MSG_SIZE, UDP_CHECK_PORT, ZERO_HASH,
 };
-use crate::herrors::HError;
+use crate::herrors::{HError, self};
 use crate::nodes::Identity;
 use crate::network::protocol::{Message, Payload, Header};
 use crate::hash::HashValue;
@@ -61,8 +63,17 @@ pub trait UdpConnection: Send + Sync {
     }
 
 
+    /// Default Implementation:
     ///udp connection, send message to another node, return the total size of 
     ///the message and the header 
+    /// This function will encode the message with a header, and then send it to a signer,
+    /// wait for the signature, and then send the message to the destination address.
+    /// # Arguments
+    /// * `dst_addr` - the destination address to send the message to.
+    /// * `msg` - the message to send.
+    /// * `sign_handle` - the signer to sign the message.
+    /// # Returns
+    /// * `Result<usize, HError>` - the total size of the message and the header.   
     async fn udp_send_to(
         dst_addr: SocketAddr, 
         msg: &Message,
@@ -85,6 +96,84 @@ pub trait UdpConnection: Send + Sync {
         let _ = udp_socket.send_to(&buffer[..total_size], dst_addr).await?;
         Ok(total_size)
         
+    }
+
+    ///Default Implementation:
+    ///Send a udp message to a destination address.
+    /// # Arguments
+    /// * `bind_addr` - the address to bind to.
+    /// * `cancel_token` - the cancellation token to cancel the task.
+    /// # Returns
+    /// * `Result<RequestWorker<(Vec<u8>, SocketAddr)>, HError>` - a request worker make a request
+    /// for this task.
+    /// 
+    /// # Example
+    /// ```
+    /// let request_worker = spawn_udp_send_to_task(bind_addr, cancel_token).await?;
+    /// let _ = req_resp::Request::send((msg_bytes, dst_addr), &request_worker).await?;
+    /// ```
+    /// then the task will receive the request .
+    async fn spawn_udp_send_to_task(
+        bind_addr: SocketAddr,
+        cancel_token: CancellationToken,
+    ) -> Result<RequestWorker<(Vec<u8>, SocketAddr)>, HError>
+    {
+        //create a channel to receive requests from other tasks
+        let (requester, mut receiver) = 
+            create_channel::<(Vec<u8>, SocketAddr)>(CHANNEL_CAPACITY);
+
+        let task = async move {
+            loop {
+                let bind_addr_clone = bind_addr.clone();
+                tokio::select! {
+                    //wait for a request from other tasks
+                    req_result = receiver.recv_data() => {
+                        match req_result {
+                            Ok(req_result) => {
+                                let (msg_bytes, dst_addr) = req_result;
+                                
+                                //send the message to dst_addr
+                                let result = socket_wrapper::send_to(
+                                    bind_addr_clone,
+                                    dst_addr,
+                                    &msg_bytes[..],
+                                ).await;
+                                match result {
+                                    Ok(size) => {
+                                        //send success, log it
+                                        let ip = dst_addr.ip();
+                                        let port = dst_addr.port();
+
+                                        herrors::logger_info(
+                                            &format!(
+                                                "udp_send_to_task: send to {}:{} size: {}", ip , port, size
+                                            )    
+                                        );
+                                        continue;
+                                    },
+                                    Err(e) => {
+                                       //send failed, log it
+                                       herrors::logger_error_with_error(&e);
+                                       continue;
+                                    }
+                                }
+                            },
+                            Err(e) => {
+                                //bad request, log it
+                                herrors::logger_error_with_error(&e);
+                                continue;
+                            }
+                        }
+                    },
+                    _ = cancel_token.cancelled() => {
+                        //got an exitting signal
+                        break;
+                    }
+                }
+            }
+        };
+        tokio::task::spawn(task);
+        Ok(requester)
     }
 
     ///an helper function for check_addresses_available, check if a addr is available
@@ -179,6 +268,31 @@ pub trait UdpConnection: Send + Sync {
         Ok(addresses_available)
     }
    
+}
+
+mod socket_wrapper {
+
+    use std::net::{ SocketAddr};
+    use  crate::herrors::HError;
+    use crate::constants::MAX_UDP_MSG_SIZE;
+    use tokio::net::UdpSocket;
+    
+    ///this is a wrapper for udp socket send_to 
+    pub async fn send_to(
+        bind_addr: SocketAddr,
+        dst_addr: SocketAddr,
+        msg_bytes: &[u8],
+    ) -> Result<usize, HError> {
+        //check the size of msg_bytes
+        if msg_bytes.len() > MAX_UDP_MSG_SIZE {
+            return Err(HError::NetWork { message: format!("send_to: msg_bytes is too large") });
+        }
+        
+        let udp_socket = UdpSocket::bind(bind_addr).await?;
+        let size = udp_socket.send_to(msg_bytes, dst_addr).await?;
+        
+        Ok(size)
+    }
 }
 
 mod tests {
