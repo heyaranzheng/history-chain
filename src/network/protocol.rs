@@ -15,7 +15,6 @@ use crate::nodes::{Identity, NodeInfo, SignRequest, SignHandle};
 use crate::network::udp::UdpConnection;
 use crate::pipe::Pipe;
 use crate::block::{Block, BlockArgs};
-use crate::nodes::Node;
 
 ///the signature of the message.
 type SignatureBytes = [u8; 64];

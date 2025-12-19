@@ -107,7 +107,6 @@ pub trait AsyncHandler{
 
 
 /// a register for async handlers.
-/// 
 pub struct AsyncRegister
 {
     handlers: HashMap<
@@ -133,6 +132,7 @@ pub struct AsyncPayloadHandler {
     register: AsyncRegister,  
 }
 
+// 实现 AsyncPayloadHandler 结构体
 impl AsyncPayloadHandler {
     pub fn new() -> Self {
         Self {
