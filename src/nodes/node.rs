@@ -220,7 +220,6 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     }
 
     ///Default Implementation:
-    /// 
     /// When a message is received from the network:
     ///  1. verify the message's signature
     ///  2. get the payload from the message
@@ -232,8 +231,8 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// * `request_worker` - the worker to handle the request 
     /// * `response_worker` - the worker to send the response  back to the network
     /// * `cancel_token` - the cancellation token for the task
-    /// 
-    async fn spawn_deliver_message_task(
+    /// Step 1: 
+    async fn spawn_recv_net_task(
         &self,
         payload_worker: RequestWorker<(Message, SocketAddr)>,
         cancel_token: CancellationToken,
@@ -286,31 +285,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         Ok(())
     }
         
-    ///use the async_payload_handler to spawn new task to deal with 
-    /// the request message's payload
-    /// 
-    /// # Returns
-    /// * `Result<RequestWorker<Payload>, HError>` - we can create a Request with your
-    /// Payload and this worker to this handler task.
-    /// 
-    /// # Example
-    /// ```
-    /// let request_worker = self.spawn_payload_handler_task.await?;
-    /// let resp = Request::send(your_payload, requests_handler).await?;
-    /// let returned_payload = resp.response().await?;
-    /// ```
-    async fn spawn_payload_handler_task(
-        &self,
-        cancel_token: CancellationToken,
-    ) -> Result<RequestWorker<Payload>, HError>
-    {
-        //get the async_payload_handler from the node
-        let async_payload_handler 
-            = self.async_payload_handler()?;
-        async_payload_handler.spawn_run(CHANNEL_CAPACITY, cancel_token)
-            .await
-    }
-    
+
 
     ///Default Implementation:
     /// Step 2: 
@@ -330,7 +305,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// //we don't send back to requester, so the returns of the Response will not be used. 
     /// let _ = Request::send(your_payload, requests_handler).await?;
     /// ```
-    async fn spwan_hanler_task(
+    async fn spawn_hanler_task(
         &self,
         encode_and_sign_worker: RequestWorker<(Message, SocketAddr)>,
         cance_token: CancellationToken,
@@ -492,6 +467,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// ```
     /// then the task will receive the request .
     async fn spawn_udp_send_to_task(
+        &self,
         bind_addr: SocketAddr,
         cancel_token: CancellationToken,
     ) -> Result<RequestWorker<(Vec<u8>, SocketAddr)>, HError>
@@ -752,8 +728,13 @@ type NodeName = HashValue;
 
 
 mod tests {
+    use std::net::IpAddr;
+
     use super::*;
     use crate::nodes::identity::{SignHandle, SignRequest, Identity};
+    use crate::herrors::HError;
+    use crate::req_resp::{Request, RequestWorker};
+    use crate::network::{Payload, PayloadTypes};
 
     struct TestNode {
         this_node_info: NodeInfo,
@@ -797,7 +778,9 @@ mod tests {
     
     }
 
+    #[async_trait]
     impl UdpConnection for TestNode {}
+    #[async_trait]
     impl Node for TestNode {}
 
     #[tokio::test(flavor = "multi_thread")]
@@ -815,6 +798,109 @@ mod tests {
         let signature = node.sign(msg).await.unwrap();
         let result = node.sign_handle().unwrap().verify(msg, &signature);
         assert!(result.is_ok());
+    }
+
+    use tokio::net::UdpSocket;
+    use crate::constants::MAX_UDP_MSG_SIZE;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_4_step_task() {
+        herrors::logger_init();
+
+        //create a testnode
+        let mut node = TestNode::new();
+        let mut nodeinfo = NodeInfo::new();
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let bind_addr = 
+            SocketAddr::new(ip, 8080);
+        let vec_addr = vec![bind_addr];
+        nodeinfo.address= Some(vec_addr);
+        node.set_nodeinfo(nodeinfo);
+
+        let cancel_token = CancellationToken::new();
+
+        //create a handler for the Payload::Empty and register it to the node
+        let async_handler = 
+            |payload: Payload| async {
+                herrors::logger_info("hello, it is handled");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                Ok::<Payload, HError>(payload)
+            };
+        let result = node.async_payload_handler();
+        assert_eq!(result.is_ok(), true);
+
+        //register the async_handler to the AsyncPayloadHandler
+        let mut async_payload_handler = result.unwrap();
+        let result = 
+            async_payload_handler.reg_async(PayloadTypes::Empty, async_handler).await;
+        assert_eq!(result.is_ok(), true);
+
+        //spawn step 4:
+        let result = 
+            node.spawn_udp_send_to_task(bind_addr, cancel_token.clone()).await;
+        assert_eq!(result.is_ok(), true);
+        let step_4_worker = result.unwrap();
+
+        //spawn step 3:
+        let result = 
+            node.spawn_encode_and_sign_task(step_4_worker, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let step_3_worker = result.unwrap();
+
+        //spawn step 2:
+        let result = node.spawn_hanler_task(step_3_worker, cancel_token.clone()).await;
+        assert_eq!(result.is_ok(), true);
+        let step_2_worker = result.unwrap();
+
+        //spawn step 1:
+        let result = node.spawn_recv_net_task(step_2_worker, cancel_token.clone()).await;
+        assert_eq!(result.is_ok(), true);
+        let step_1_worker = result.unwrap();
+
+        //wait a second for the task to start
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+
+        //get the this node's name
+        let name = node.nodeinfo().unwrap().name().unwrap();
+        
+        
+        //----crate a test message and send it, then wait for the response
+        
+        //create a new id, which will give us a name. 
+        //and we can use this id to sign the message.
+        let mut id = Identity::new();
+        let new_name = id.public_key_to_bytes();
+
+        //create a empty message 
+        let msg = Message::new(new_name, name, Payload::Empty);
+        let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+        let bytes_size =msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+        buffer.truncate(bytes_size);
+
+        let sender_addr = SocketAddr::new(ip, 8081);
+        //send the message to the test node
+        let result = UdpSocket::bind(sender_addr).await;
+        assert_eq!(result.is_ok(), true);
+        let socket = result.unwrap();
+        let result = socket.send_to(&buffer, bind_addr).await;
+        assert_eq!(result.is_ok(), true);
+
+        //wait for the response
+        let (bytes_size, _) = socket.recv_from(&mut buffer).await.unwrap();
+        
+        let msg = Message::decode_from_slice(&new_name, &buffer[..bytes_size]).unwrap();
+        assert_eq!(msg.payload, Payload::Empty);
+
+
+
+
+        //wait for the response
+
+
+
+
+        
     }
 
 }

@@ -536,7 +536,7 @@ mod tests {
         ;
         
                 // register the handler, ignore the result
-        let _ = handler.reg_async(PayloadTypes::Empty, async_handle);
+        let _ = handler.reg_async(PayloadTypes::Empty, async_handle).await;
 
         //create a canncellation token for the handler task.
         let canc_token = CancellationToken::new();
