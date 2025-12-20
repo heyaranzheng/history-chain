@@ -1,5 +1,6 @@
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -69,7 +70,7 @@ pub trait AsyncHandler{
     ) -> Result<(), HError>;
 
     /// register a async handler for a specific payload type.
-    fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F) 
+    async fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F) 
         -> Result<(), HError>
     where F: Fn(Payload) -> Fut + Send + Sync + 'static,
           Fut: Future<Output = Result<Payload, HError>> + Send + Sync + 'static;
@@ -107,6 +108,7 @@ pub trait AsyncHandler{
 
 
 /// a register for async handlers.
+/// 
 pub struct AsyncRegister
 {
     handlers: HashMap<
@@ -129,17 +131,25 @@ impl AsyncRegister {
 }
 
 pub struct AsyncPayloadHandler {
-    register: AsyncRegister,  
+    register: Arc<Mutex<AsyncRegister>>,  
 }
 
-// 实现 AsyncPayloadHandler 结构体
 impl AsyncPayloadHandler {
     pub fn new() -> Self {
         Self {
-            register: AsyncRegister::new(),
+            register: Arc::new(Mutex::new(AsyncRegister::new())),
         }
     }
 }
+impl Clone for AsyncPayloadHandler {
+    fn clone(&self) -> Self {
+        Self {
+            register: self.register.clone()
+        }
+    }
+}
+
+
 
 #[async_trait]
 impl AsyncHandler for AsyncPayloadHandler {
@@ -149,8 +159,9 @@ impl AsyncHandler for AsyncPayloadHandler {
         -> Result<Payload, HError> 
     {
         let payload_type = PayloadTypes::from_payload(&payload);
+        let register = self.register.lock().await;
         if let Some(handler) = 
-            self.register.handlers.get(&payload_type)
+            register.handlers.get(&payload_type)
         {
             //return the result
             handler(payload).await
@@ -187,7 +198,7 @@ impl AsyncHandler for AsyncPayloadHandler {
 
 
 
-    fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F)
+    async fn reg_async <F, Fut>(&mut self, payload_type: PayloadTypes, async_handler: F)
         -> Result<(), HError>
     where F: Fn(Payload) -> Fut + Send + Sync + 'static,
           Fut: Future<Output = Result<Payload, HError>> + Send + Sync + 'static,
@@ -204,7 +215,8 @@ impl AsyncHandler for AsyncPayloadHandler {
             + Sync
         >; 
        
-        self.register.handlers.insert(payload_type, box_pinned_handler);
+        let mut register = self.register.lock().await;
+        register.handlers.insert(payload_type, box_pinned_handler);
         Ok(())
     }
 
