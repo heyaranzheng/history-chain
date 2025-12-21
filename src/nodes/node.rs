@@ -139,9 +139,10 @@ impl NodeInfo {
 
 ///trait for Node, it is used to operate the node's private fields,
 /// especially for the sign_handle and nodeinfo.
+#[async_trait]
 pub trait NodeAppend {
     ///create a new node
-    fn new() -> Self;
+    async fn new() -> Self;
     ///set node's nodeinfo
     fn set_nodeinfo(&mut self, nodeinfo: NodeInfo);
     ///get node's nodeinfo
@@ -204,7 +205,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// Default Implmentation:
     /// Initialize a new node with a cancellation token
     async fn init_new(cancel_token: CancellationToken) -> Result<Self, HError>   {
-        let mut node = Self::new();
+        let mut node = Self::new().await;
         let id = Identity::new();
         let name = id.public_key_to_bytes();
 
@@ -243,9 +244,6 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
         
         //Note: I just use the 1st address as a bind_addr for now.
         let bind_addr = bind_addrs[0].clone();
-
-        //clone the sign_handle, so the new task can sign a message
-        let sign_handle = self.sign_handle()?.clone();
 
         let task = async move {
             loop {
@@ -305,7 +303,7 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
     /// //we don't send back to requester, so the returns of the Response will not be used. 
     /// let _ = Request::send(your_payload, requests_handler).await?;
     /// ```
-    async fn spawn_hanler_task(
+    async fn spawn_handler_task(
         &self,
         encode_and_sign_worker: RequestWorker<(Message, SocketAddr)>,
         cance_token: CancellationToken,
@@ -743,6 +741,7 @@ mod tests {
         async_payload_handler: AsyncPayloadHandler,
     }
 
+    #[async_trait]
     impl NodeAppend for TestNode {
         fn set_nodeinfo(&mut self, nodeinfo: NodeInfo) {
             self.this_node_info = nodeinfo;
@@ -767,12 +766,37 @@ mod tests {
             Ok(self.async_payload_handler.clone())
         }
 
-        fn new() -> Self {
+        async fn new() -> Self {
+            let mut nodeinfo = NodeInfo::new();
+            let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+            let bind_addr = 
+                SocketAddr::new(ip, 8080);
+            let vec_addr = vec![bind_addr];
+            nodeinfo.address= Some(vec_addr);
+
+            let id = Identity::new();
+            let sign_handle_result = 
+                SignHandle::spawn_new(id, 32, CancellationToken::new())
+                .await;
+            assert_eq!(sign_handle_result.is_ok(), true);
+            let sign_handle = sign_handle_result.unwrap();
+
+             //create a handler for the Payload::Empty and register it to the node
+            let async_handler = 
+            |payload: Payload| async {
+                herrors::logger_info("hello, it is handled");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                Ok::<Payload, HError>(payload)
+            };
+            let mut async_payload_handler = AsyncPayloadHandler::new();
+            let result = async_payload_handler.reg_async(PayloadTypes::Empty, async_handler).await;
+            assert!(result.is_ok());
+            
             Self {
-                this_node_info: NodeInfo::new(),
-                sign_handle: None,
+                this_node_info: nodeinfo,
+                sign_handle: Some(sign_handle),
                 friends: HashMap::new(),
-                async_payload_handler: AsyncPayloadHandler::new(),
+                async_payload_handler: async_payload_handler,
             }
         }
     
@@ -804,37 +828,22 @@ mod tests {
     use crate::constants::MAX_UDP_MSG_SIZE;
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_step1_task() {
+
+
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_spawn_4_step_task() {
         herrors::logger_init();
 
-        //create a testnode
-        let mut node = TestNode::new();
-        let mut nodeinfo = NodeInfo::new();
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        let bind_addr = 
-            SocketAddr::new(ip, 8080);
-        let vec_addr = vec![bind_addr];
-        nodeinfo.address= Some(vec_addr);
-        node.set_nodeinfo(nodeinfo);
-
         let cancel_token = CancellationToken::new();
 
-        //create a handler for the Payload::Empty and register it to the node
-        let async_handler = 
-            |payload: Payload| async {
-                herrors::logger_info("hello, it is handled");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                Ok::<Payload, HError>(payload)
-            };
-        let result = node.async_payload_handler();
-        assert_eq!(result.is_ok(), true);
+        let mut node = TestNode::new().await;
 
-        //register the async_handler to the AsyncPayloadHandler
-        let mut async_payload_handler = result.unwrap();
-        let result = 
-            async_payload_handler.reg_async(PayloadTypes::Empty, async_handler).await;
-        assert_eq!(result.is_ok(), true);
-
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+            let bind_addr = 
+                SocketAddr::new(ip, 8080);
         //spawn step 4:
         let result = 
             node.spawn_udp_send_to_task(bind_addr, cancel_token.clone()).await;
@@ -849,14 +858,13 @@ mod tests {
         let step_3_worker = result.unwrap();
 
         //spawn step 2:
-        let result = node.spawn_hanler_task(step_3_worker, cancel_token.clone()).await;
+        let result = node.spawn_handler_task(step_3_worker, cancel_token.clone()).await;
         assert_eq!(result.is_ok(), true);
         let step_2_worker = result.unwrap();
 
         //spawn step 1:
         let result = node.spawn_recv_net_task(step_2_worker, cancel_token.clone()).await;
         assert_eq!(result.is_ok(), true);
-        let step_1_worker = result.unwrap();
 
         //wait a second for the task to start
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
@@ -871,11 +879,13 @@ mod tests {
         //and we can use this id to sign the message.
         let mut id = Identity::new();
         let new_name = id.public_key_to_bytes();
+        let sender_sign_handle = 
+            SignHandle::spawn_new(id, 1, cancel_token.clone()).await.unwrap();
 
         //create a empty message 
         let msg = Message::new(new_name, name, Payload::Empty);
         let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
-        let bytes_size =msg.encode_into_slice(&mut id, &mut buffer[..]).unwrap();
+        let bytes_size = msg.encode(&sender_sign_handle, &mut buffer).await.unwrap();
         buffer.truncate(bytes_size);
 
         let sender_addr = SocketAddr::new(ip, 8081);
