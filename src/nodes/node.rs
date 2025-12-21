@@ -268,10 +268,11 @@ pub trait Node: UdpConnection + Sized + NodeAppend{
                             //It's an message not an error
                             Ok((msg, request_addr)) => {
                                 //send the message to the next processing task.
-                                let result = Request::send(
+                                let _ = Request::send(
                                     (msg, request_addr), 
                                     payload_worker.clone()
                                 ).await;
+
                             }
                         }
                     }
@@ -723,8 +724,7 @@ pub enum NodeState {
 
 type NodeName = HashValue;
     
-
-
+#[cfg(test)]
 mod tests {
     use std::net::IpAddr;
 
@@ -766,6 +766,7 @@ mod tests {
             Ok(self.async_payload_handler.clone())
         }
 
+        ///create a test node with a sign handle and a async payload handler
         async fn new() -> Self {
             let mut nodeinfo = NodeInfo::new();
             let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
@@ -780,6 +781,8 @@ mod tests {
                 .await;
             assert_eq!(sign_handle_result.is_ok(), true);
             let sign_handle = sign_handle_result.unwrap();
+            let name = sign_handle.public_key_bytes();
+            nodeinfo.name = Some(name);
 
              //create a handler for the Payload::Empty and register it to the node
             let async_handler = 
@@ -825,13 +828,66 @@ mod tests {
     }
 
     use tokio::net::UdpSocket;
-    use crate::constants::MAX_UDP_MSG_SIZE;
+    use crate::constants::MAX_UDP_MSG_SIZE; 
+
+    ///create a new identity, and use it to sign  a empty message, then send it to the destination address.
+    /// The destination address is set as 127.0.0.1:8080
+    /// # Arguments
+    /// * `name` - the name of the node to receive the message.
+    /// * `cancel_token` - the cancellation token to cancel the task.
+    async fn send_empty_payload_to_port_8080(name: HashValue, cancel_token: CancellationToken) 
+        -> Result<(UdpSocket, HashValue), HError> {
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let sender_addr = SocketAddr::new(ip, 8081);
+
+        //create a new id, which will give us a name. 
+        //and we can use this id to sign the message.
+        let id = Identity::new();
+        let new_name = id.public_key_to_bytes();
+        let sender_sign_handle = 
+            SignHandle::spawn_new(id, 32, cancel_token.clone()).await?;
+
+        //create a empty message 
+        let msg = Message::new(new_name, name, Payload::Empty);
+        let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
+        let bytes_size = msg.encode(&sender_sign_handle, &mut buffer).await.unwrap();
+        buffer.truncate(bytes_size);
+
+        let receiver_addr = SocketAddr::new(ip, 8080);
+        //send the message to the test node
+        let result = UdpSocket::bind(sender_addr).await;
+        assert_eq!(result.is_ok(), true);
+        let socket = result.unwrap();
+        socket.send_to(&buffer, receiver_addr).await?;
+        Ok((socket, new_name))
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_spawn_step1_task() {
+        herrors::logger_init();
+        let cancel_token = CancellationToken::new();
+        let node = TestNode::new().await;
+        let name = node.nodeinfo().unwrap().name().unwrap();
+
+        //create a test channel to receive the request
+        let (requester, mut receiver) = 
+            create_channel::<(Message, SocketAddr)>(100);
+
+        let result = node.spawn_recv_net_task(requester, cancel_token.clone()).await;
+        assert_eq!(result.is_ok(), true);
+
+        send_empty_payload_to_port_8080(name, cancel_token.clone()).await.unwrap();
+
+        let result = receiver.recv_data().await;
+        assert_eq!(result.is_ok(), true);
+        let (msg, src_addr) = result.unwrap();
+        assert_eq!(msg.payload, Payload::Empty);
+        assert_eq!(src_addr.to_string(), "127.0.0.1:8081" );
 
 
     }
+
+
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_spawn_4_step_task() {
@@ -839,11 +895,9 @@ mod tests {
 
         let cancel_token = CancellationToken::new();
 
-        let mut node = TestNode::new().await;
+        let node = TestNode::new().await;
+        let bind_addr = node.nodeinfo().unwrap().address().unwrap()[0];
 
-        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-            let bind_addr = 
-                SocketAddr::new(ip, 8080);
         //spawn step 4:
         let result = 
             node.spawn_udp_send_to_task(bind_addr, cancel_token.clone()).await;
@@ -869,48 +923,18 @@ mod tests {
         //wait a second for the task to start
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
 
-        //get the this node's name
+        //send a message to the test node
         let name = node.nodeinfo().unwrap().name().unwrap();
-        
-        
-        //----crate a test message and send it, then wait for the response
-        
-        //create a new id, which will give us a name. 
-        //and we can use this id to sign the message.
-        let mut id = Identity::new();
-        let new_name = id.public_key_to_bytes();
-        let sender_sign_handle = 
-            SignHandle::spawn_new(id, 1, cancel_token.clone()).await.unwrap();
+        let result =send_empty_payload_to_port_8080(name, cancel_token.clone()).await;
+        assert_eq!(result.is_ok(), true);
+        let (socket , new_name) = result.unwrap();
 
-        //create a empty message 
-        let msg = Message::new(new_name, name, Payload::Empty);
         let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
-        let bytes_size = msg.encode(&sender_sign_handle, &mut buffer).await.unwrap();
-        buffer.truncate(bytes_size);
-
-        let sender_addr = SocketAddr::new(ip, 8081);
-        //send the message to the test node
-        let result = UdpSocket::bind(sender_addr).await;
-        assert_eq!(result.is_ok(), true);
-        let socket = result.unwrap();
-        let result = socket.send_to(&buffer, bind_addr).await;
-        assert_eq!(result.is_ok(), true);
-
         //wait for the response
         let (bytes_size, _) = socket.recv_from(&mut buffer).await.unwrap();
         
         let msg = Message::decode_from_slice(&new_name, &buffer[..bytes_size]).unwrap();
-        assert_eq!(msg.payload, Payload::Empty);
-
-
-
-
-        //wait for the response
-
-
-
-
-        
+        assert_eq!(msg.payload, Payload::Empty);        
     }
 
 }
