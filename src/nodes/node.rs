@@ -767,14 +767,21 @@ mod tests {
         }
 
         ///create a test node with a sign handle and a async payload handler
+        ///We give 2 bind address to the node, one is bound to the listen port 8080,
+        ///the other one is bound to the sender port 8888
         async fn new() -> Self {
+            //crate a  nodeinfo
             let mut nodeinfo = NodeInfo::new();
+
+            //give this node two addresses.
             let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
             let bind_addr = 
                 SocketAddr::new(ip, 8080);
-            let vec_addr = vec![bind_addr];
+            let sender_addr = SocketAddr::new(ip, 8888);
+            let vec_addr = vec![bind_addr, sender_addr];
             nodeinfo.address= Some(vec_addr);
 
+            //create a identity, and use it to create a sign handle
             let id = Identity::new();
             let sign_handle_result = 
                 SignHandle::spawn_new(id, 32, CancellationToken::new())
@@ -784,11 +791,11 @@ mod tests {
             let name = sign_handle.public_key_bytes();
             nodeinfo.name = Some(name);
 
-             //create a handler for the Payload::Empty and register it to the node
+            //create a handler for the Payload::Empty and register it to the node
             let async_handler = 
             |payload: Payload| async {
                 herrors::logger_info("hello, it is handled");
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 Ok::<Payload, HError>(payload)
             };
             let mut async_payload_handler = AsyncPayloadHandler::new();
@@ -863,7 +870,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_spawn_step1_task() {
+    async fn test_spawn_step1_task()  {
         herrors::logger_init();
         let cancel_token = CancellationToken::new();
         let node = TestNode::new().await;
@@ -884,19 +891,115 @@ mod tests {
         assert_eq!(msg.payload, Payload::Empty);
         assert_eq!(src_addr.to_string(), "127.0.0.1:8081" );
 
+    }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_step2_task() {
+        herrors::logger_init_above_info();
+        let cancel_token = CancellationToken::new();
+        let node = TestNode::new().await;
+        let name = node.nodeinfo().unwrap().name().unwrap();
+
+        //create a test channel to receive the request. we can send a data to this 
+        //new task with requester and receive the result of the data processing from this 
+        //task with receiver.
+        let (requester, mut receiver) = 
+            create_channel::<(Message, SocketAddr)>(100);
+        
+        //spawn step 2:
+        let result = 
+            node.spawn_handler_task(requester, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let step_2_worker = result.unwrap();
+
+        //spawn step 1:
+        let result = 
+            node.spawn_recv_net_task(step_2_worker, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+
+        //create a new identity, send a empty payload message to the node
+        let result = 
+            send_empty_payload_to_port_8080(name, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let (socket, new_name) = result.unwrap();
+
+        //wait for the production of step2 task, after it process an empty payload message,
+        let result = receiver.recv_data().await;
+        assert_eq!(result.is_ok(), true);
+        let (msg, src_addr) = result.unwrap();
+        assert_eq!(msg.payload, Payload::Empty);
+        assert_eq!(src_addr.to_string(), "127.0.0.1:8081" );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_spawn_step3_task() {
+        herrors::logger_init_above_info();
+        let cancel_token = CancellationToken::new();
+        let node = TestNode::new().await;
+        let name = node.nodeinfo().unwrap().name().unwrap();
+
+        //create a test channel to receive the request. we can send a data to this 
+        //new task with requester and receive the result of the data processing from this 
+        //task with receiver.
+        let (requester, mut receiver) = 
+            create_channel::<(Vec<u8>, SocketAddr)>(100);
+        
+        //spawn step 3:
+        let result = 
+            node.spawn_encode_and_sign_task(requester, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let step_3_worker = result.unwrap();
+
+        //spawn step 2:
+        let result = 
+            node.spawn_handler_task(step_3_worker, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let step_2_worker = result.unwrap();
+
+        //spawn step 1:
+        let result = 
+            node.spawn_recv_net_task(step_2_worker, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+
+        //create a new identity, send a empty payload message to the node
+        let result = 
+            send_empty_payload_to_port_8080(name, cancel_token.clone())
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let (socket, new_name) = result.unwrap();
+
+        //wait for the production of step3 task, after it process an empty payload message,
+        let result = receiver.recv_data().await;
+        assert_eq!(result.is_ok(), true);
+        let (vec_bytes, src_addr) = result.unwrap();
+
+        //get out the message from the vec_bytes, then verify the message and the src_addr
+        let msg = Message::decode_from_slice(&new_name, &vec_bytes).unwrap();
+        assert_eq!(msg.payload, Payload::Empty);
+        assert_eq!(src_addr.to_string(), "127.0.0.1:8081" );
     }
 
 
-
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_spawn_4_step_task() {
-        herrors::logger_init();
+    async fn test_spawn_step4_task() {
+
+        herrors::logger_init_above_info();
 
         let cancel_token = CancellationToken::new();
 
         let node = TestNode::new().await;
-        let bind_addr = node.nodeinfo().unwrap().address().unwrap()[0];
+        let mut bind_addr = node.nodeinfo().unwrap().address().unwrap()[0];
+        
+        
+        //the default listen port to receive the message of the node is 8080, so we need to use another
+        //port to send  the message out from the node.
+        bind_addr.set_port(8888);
 
         //spawn step 4:
         let result = 
@@ -920,9 +1023,6 @@ mod tests {
         let result = node.spawn_recv_net_task(step_2_worker, cancel_token.clone()).await;
         assert_eq!(result.is_ok(), true);
 
-        //wait a second for the task to start
-        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-
         //send a message to the test node
         let name = node.nodeinfo().unwrap().name().unwrap();
         let result =send_empty_payload_to_port_8080(name, cancel_token.clone()).await;
@@ -934,7 +1034,8 @@ mod tests {
         let (bytes_size, _) = socket.recv_from(&mut buffer).await.unwrap();
         
         let msg = Message::decode_from_slice(&new_name, &buffer[..bytes_size]).unwrap();
-        assert_eq!(msg.payload, Payload::Empty);        
+        assert_eq!(msg.payload, Payload::Empty);       
+        cancel_token.cancel(); 
     }
 
 }
