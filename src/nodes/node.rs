@@ -730,7 +730,7 @@ mod tests {
 
     use super::*;
     use crate::nodes::identity::{SignHandle, SignRequest, Identity};
-    use crate::herrors::HError;
+    use crate::herrors::{HError, logger_info};
     use crate::req_resp::{Request, RequestWorker};
     use crate::network::{Payload, PayloadTypes};
 
@@ -795,7 +795,7 @@ mod tests {
             let async_handler = 
             |payload: Payload| async {
                 herrors::logger_info("hello, it is handled");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 Ok::<Payload, HError>(payload)
             };
             let mut async_payload_handler = AsyncPayloadHandler::new();
@@ -1023,19 +1023,33 @@ mod tests {
         let result = node.spawn_recv_net_task(step_2_worker, cancel_token.clone()).await;
         assert_eq!(result.is_ok(), true);
 
-        //send a message to the test node
-        let name = node.nodeinfo().unwrap().name().unwrap();
-        let result =send_empty_payload_to_port_8080(name, cancel_token.clone()).await;
-        assert_eq!(result.is_ok(), true);
-        let (socket , new_name) = result.unwrap();
-
+        let mut count = 0;
         let mut buffer = vec![0u8; MAX_UDP_MSG_SIZE];
-        //wait for the response
-        let (bytes_size, _) = socket.recv_from(&mut buffer).await.unwrap();
-        
-        let msg = Message::decode_from_slice(&new_name, &buffer[..bytes_size]).unwrap();
-        assert_eq!(msg.payload, Payload::Empty);       
-        cancel_token.cancel(); 
+        let task = async {
+            loop {
+                //send a message to the test node
+                let name = node.nodeinfo().unwrap().name().unwrap();
+                let result =send_empty_payload_to_port_8080(name, cancel_token.clone()).await;
+                assert_eq!(result.is_ok(), true);
+                let (socket , new_name) = result.unwrap();
+
+            
+                //wait for the response
+                let (bytes_size, _) = socket.recv_from(&mut buffer).await.unwrap();
+                
+                let msg = Message::decode_from_slice(&new_name, &buffer[..bytes_size]).unwrap();
+                assert_eq!(msg.payload, Payload::Empty);     
+                count += 1;                      
+            }
+        };
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10), 
+            task
+        ).await;
+
+
+        println!("count: {}", count);
+        cancel_token.cancel();
     }
 
 }

@@ -30,4 +30,4 @@ pub const TIME_MS_FOR_UNP_RECV: u64 = 5000; // 5 seconds
 
 
 // the capacity of the tokio's mpsc channel or oneshot channel
-pub const CHANNEL_CAPACITY: usize = 64;
+pub const CHANNEL_CAPACITY: usize = 1024;
