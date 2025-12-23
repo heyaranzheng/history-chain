@@ -14,4 +14,3 @@ mod utils;
 mod archive;
 mod req_resp;
 mod uuidbytes;
-mod storage;
