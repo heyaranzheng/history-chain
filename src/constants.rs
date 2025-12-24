@@ -31,3 +31,7 @@ pub const TIME_MS_FOR_UNP_RECV: u64 = 5000; // 5 seconds
 
 // the capacity of the tokio's mpsc channel or oneshot channel
 pub const CHANNEL_CAPACITY: usize = 1024;
+
+///the max length of the file name
+/// It shoudle be greater than 16, I may use it in the uuidbytes situation. 
+pub const MAX_FILE_NAME_LEN: usize = 128;

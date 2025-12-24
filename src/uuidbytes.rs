@@ -14,6 +14,7 @@ impl Init for UuidBytes {
         let uuid_bytes = uuid.as_bytes().clone().into();
         uuid_bytes
     }
+    
 }
 
 
