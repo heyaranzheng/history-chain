@@ -367,21 +367,23 @@ mod tests {
     async fn test_file_database() {   
         //create a new directory for the test
         let mut current_dir = std::env::current_dir().unwrap();
-        let current_dir_clone = current_dir.clone();
-        let mut test_dir =current_dir_clone.join("test_dir");
-        let result =tokio::fs::create_dir_all(test_dir.clone()).await;
+        current_dir.push("test_dir");
+        let test_dir = current_dir.clone();
+        current_dir.push("src");
+        let src = current_dir.clone();
+        let result =tokio::fs::create_dir_all(src.clone()).await;
         assert_eq!(result.is_ok(), true);
 
         let mut test_meta_vec = Vec::new();
 
         for i in  0..1000 {
             let file_name = format!("test_file_{}.txt", i);
-            let mut test_dir_clone = test_dir.clone();
-            let file_path = test_dir_clone.join(file_name.clone());
+            let src_clone = src.clone();
+            let file_path = src_clone.join(file_name.clone());
             let mut file = std::fs::File::create(file_path).unwrap();
             let content = format!("hello world {}", i);
             for _ in 0..10000 {
-                file.write_all(content.as_bytes());
+                let _ = file.write_all(content.as_bytes());
             }
             let uuid = UuidBytes::new();
 
@@ -389,15 +391,17 @@ mod tests {
             test_meta_vec.push(meta);
         }
 
-        //create a new file database
-
-        let file_db = FileDataBase::new(None);
+        //create a new file database, the directory is test_dir
+        let test_dir_string = test_dir.to_str().unwrap().to_string();
+        let file_db = FileDataBase::new(
+            Some(test_dir_string)
+        );
         assert_eq!(file_db.is_ok(), true);
         let file_db = file_db.unwrap();
 
         for i in  0..1000 {          
             let file_name = format!("test_file_{}.txt", i);
-            let file_path = test_dir.clone();
+            let file_path = src.clone();
             let file_name = file_path.join(file_name);
             let result = file_db.save(
                 file_name.to_str().to_owned().unwrap().to_string(), 
@@ -406,6 +410,7 @@ mod tests {
             assert_eq!(result.is_ok(), true);
         }
         
+
     }
     
 
