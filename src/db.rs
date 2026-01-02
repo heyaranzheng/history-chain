@@ -32,7 +32,7 @@ pub trait Meta {
 }
     
 
-#[derive(Clone, Decode, Encode)]
+#[derive(Clone, Decode, Encode, Debug)]
 pub struct MetaData {
     name: String,
     uuid: UuidBytes,
@@ -281,7 +281,8 @@ impl DataBase for FileDataBase {
     }
 
     ///find a meta data by the uuid.
-    ///check the memory first, if we don't have
+    ///check the memory first, if we don't have memoery cache, then 
+    /// read the meta data from the file and insert it into the memory.
     async fn find(&self, uuid: UuidBytes) -> Option<MetaData> {
         let mut result_meta = None;
         
@@ -358,6 +359,8 @@ pub struct Bundle <B>
 mod tests {
     use std::io::Write;
 
+    use rand::Rng;
+
     use super::*;
 
     use crate::uuidbytes::{UuidBytes, Init};
@@ -365,6 +368,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_file_database() {   
+        use tokio::time::{Duration, Instant};
+
+        //this is the constant of the test count.
+        const TEST_COUNT: u32 = 1000;
+
+        //the message will repeat in the test file for 
+        //TestFileMessageRepeatTimes times.
+        const TEST_FILE_MSG_REPEAT_TIMES: u64 = 100;
+
         //create a new directory for the test
         let mut current_dir = std::env::current_dir().unwrap();
         current_dir.push("test_dir");
@@ -376,14 +388,15 @@ mod tests {
 
         let mut test_meta_vec = Vec::new();
 
-        for i in  0..1000 {
+        //create TestCount files
+        for i in  0..TEST_COUNT {
             let file_name = format!("test_file_{}.txt", i);
             let src_clone = src.clone();
             let file_path = src_clone.join(file_name.clone());
             let mut file = std::fs::File::create(file_path).unwrap();
             let content = format!("hello world {}", i);
-            for _ in 0..10000 {
-                let _ = file.write_all(content.as_bytes());
+            for _ in 0..TEST_FILE_MSG_REPEAT_TIMES {
+                let _ = file.write(content.as_bytes());
             }
             let uuid = UuidBytes::new();
 
@@ -399,19 +412,146 @@ mod tests {
         assert_eq!(file_db.is_ok(), true);
         let file_db = file_db.unwrap();
 
-        for i in  0..1000 {          
+        //test the efficiency of the save function.
+        let mut save_times = Vec::with_capacity(TEST_COUNT as usize);
+        
+        for i in  0..TEST_COUNT {          
             let file_name = format!("test_file_{}.txt", i);
             let file_path = src.clone();
             let file_name = file_path.join(file_name);
+
+            //start the timer
+            let start = Instant::now();
             let result = file_db.save(
                 file_name.to_str().to_owned().unwrap().to_string(), 
                 test_meta_vec[i as usize].clone()
             ).await;
+            //stop the timer
+            let duration = start.elapsed();
             assert_eq!(result.is_ok(), true);
+            //save the time
+            save_times.push(duration.as_nanos());
         }
-        
+
+        //analyze the statistics of the save function.
+        let save_total = save_times.iter().sum::<u128>();       
+        let save_avg: f64 = save_total as f64 / TEST_COUNT as f64;
+        let save_max = *save_times.iter().max().unwrap();
+        let save_min = *save_times.iter().min().unwrap();
+        println!("Test Counter: {}", TEST_COUNT);
+        println!("save_total: {}", save_total);
+        println!("save_avg: {}", save_avg);
+        println!("save_max: {}", save_max);
+        println!("save_min: {}", save_min);
+
+        //print a split line
+        println!("-----------------------------");
+        println!("-----------------------------");
+        println!("Test File Database");
+        //test the meta dataiterator
+        let mut meta_iterator = MetaDataIterator::new(
+            file_db.data_dir.join("meta")
+        ).await.unwrap();
+
+        while let Some(meta_result) = meta_iterator.next().await {
+            match meta_result {
+                Ok(meta) => {
+                    println!("meta: {:?}", meta);
+                }
+                Err(e) => {
+                    println!("error: {:?}", e);
+                }
+            }
+        }
+
+        //print a split line
+        println!("----------------------------");
+        println!("Test File Database");
+
+
+
+        //test the efficiency of the find function.
+        let mut find_times = Vec::with_capacity(TEST_COUNT as usize);
+
+        //create a random seed
+        let mut rng = rand::thread_rng();
+
+        for _ in  0..TEST_COUNT {
+            //use the random seed to get a random index
+            let index = rng.gen_range(0..TEST_COUNT);
+
+            //chose a uuid from the test_meta_vec randomly
+            let uuid = test_meta_vec[index as usize].uuid();
+
+            //start the timer
+            let start = Instant::now();
+            let result = file_db.find(uuid).await;
+            //stop the timer
+            let duration = start.elapsed();
+            assert_eq!(result.is_some(), true);
+            //save the time
+            find_times.push(duration.as_nanos());
+        }
+
+        //analyze the statistics of the find function.
+        let find_total = find_times.iter().sum::<u128>();       
+        let find_avg: f64 = find_total as f64 / TEST_COUNT as f64;
+        let find_max = *find_times.iter().max().unwrap();
+        let find_min = *find_times.iter().min().unwrap();
+        println!("Test Counter: {}", TEST_COUNT);
+        println!("find_total: {}", find_total);
+        println!("find_avg: {}", find_avg);
+        println!("find_max: {}", find_max);
+
+        //pinrt a split line
+        println!("-----------------------------------------");
+        println!("Test FileDatabase whether has a memory cache");
+        let meta_list 
+            = file_db.uuid_list.lock().await;
+        for i in 0 .. TEST_COUNT {
+            let result = test_meta_vec.pop();
+            assert_eq!(result.is_some(), true);
+            let meta = result.unwrap();
+            let name = meta.name;
+            let uuid = meta.uuid;
+
+            //check the list
+            let result = meta_list.get(&uuid);
+            assert_eq!(result.is_some(), true);
+            let name_from_list = result.unwrap().clone().name;
+
+            assert_eq!(name, name_from_list);
+        }
+
+
+                    
+
+
+        //clear the test directory after the test.
+        let result = clear_test_dir().await;
+        assert_eq!(result.is_ok(), true);
 
     }
-    
+
+    async fn clear_test_dir() -> Result<(), HError> {
+        //get the test_dir
+        let current_dir = std::env::current_dir()?;
+        let path = current_dir.join("test_dir");
+
+        //delete the test_dir
+        println!("removing test_dir... ");
+        let result
+           = tokio::fs::remove_dir_all(path).await;
+        match result {
+            Ok(_) => {
+                println!("removed test_dir.");
+                Ok(())
+            }
+            Err(e) => {
+                println!("failed to remove test_dir.");
+                Err(e.into())
+            }
+        }
+    }
 
 }
