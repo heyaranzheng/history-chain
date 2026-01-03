@@ -20,9 +20,16 @@ use crate::constants::MAX_FILE_NAME_LEN;
 #[async_trait]
 pub trait DataBase {
     ///save the data to some Database.
-    async fn save(&self, file_name: String, meta: MetaData) -> Result<(), HError>;
+    async fn save_file(&self, file_name: String, meta: MetaData) -> Result<(), HError>;
     ///get out the data from some database by the uuid.
-    async fn find(&self, uuid: UuidBytes) -> Option<MetaData>;
+    async fn find_meta(&self, uuid: UuidBytes) -> Option<MetaData>;
+    ///save a chain to the database.
+    async fn save_chain<B>(&self, chain: &BlockChain<B>) -> Result<(), HError>
+        where B: Block;
+    ///give a block's uuid, find it in the database and return the chain which
+    /// contains the block.
+    async fn find_chain<B>(&self, uuid: UuidBytes) -> Option<BlockChain<B>>
+        where B: Block;
 }
 
 ///a meta data is responsible for storing the meta information of a data block.
@@ -247,7 +254,7 @@ impl FileDataBase {
 #[async_trait]
 impl DataBase for FileDataBase {
     ///For now, we just create a file named "data", then save the data into it.
-    async fn save(&self, file_path: String, meta: MetaData) -> Result<(), HError> {
+    async fn save_file(&self, file_path: String, meta: MetaData) -> Result<(), HError> {
         //just copy the file to the data directory.
         let mut data_dir = self.data_dir.clone();
 
@@ -283,7 +290,7 @@ impl DataBase for FileDataBase {
     ///find a meta data by the uuid.
     ///check the memory first, if we don't have memoery cache, then 
     /// read the meta data from the file and insert it into the memory.
-    async fn find(&self, uuid: UuidBytes) -> Option<MetaData> {
+    async fn find_meta(&self, uuid: UuidBytes) -> Option<MetaData> {
         let mut result_meta = None;
         
         //check if we have an list in memory.
@@ -332,6 +339,15 @@ impl DataBase for FileDataBase {
             }
             result_meta
         }
+    }
+
+    /// save a chain to the database.
+    async fn save_chain<B>(&self, chain: &BlockChain<B>) -> Result<(), HError>
+        where B: Block
+    {
+        //open a file to save the chain, named with bundle_file.
+        let mut bundle_file = self.bundle_file.clone();   
+        
     }
 }
 
@@ -422,7 +438,7 @@ mod tests {
 
             //start the timer
             let start = Instant::now();
-            let result = file_db.save(
+            let result = file_db.save_file(
                 file_name.to_str().to_owned().unwrap().to_string(), 
                 test_meta_vec[i as usize].clone()
             ).await;
@@ -485,7 +501,7 @@ mod tests {
 
             //start the timer
             let start = Instant::now();
-            let result = file_db.find(uuid).await;
+            let result = file_db.find_meta(uuid).await;
             //stop the timer
             let duration = start.elapsed();
             assert_eq!(result.is_some(), true);
@@ -508,7 +524,7 @@ mod tests {
         println!("Test FileDatabase whether has a memory cache");
         let meta_list 
             = file_db.uuid_list.lock().await;
-        for i in 0 .. TEST_COUNT {
+        for _ in 0 .. TEST_COUNT {
             let result = test_meta_vec.pop();
             assert_eq!(result.is_some(), true);
             let meta = result.unwrap();
