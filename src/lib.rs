@@ -7,6 +7,7 @@ mod constants;
 mod chain;
 mod fpsc;
 mod hash;
+mod Serializer;
 mod pipe;
 mod block;
 mod keeper;
