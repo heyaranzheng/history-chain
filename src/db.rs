@@ -341,14 +341,23 @@ impl DataBase for FileDataBase {
         }
     }
 
-    /// save a chain to the database.
+    //-------------------------------------------------
+    ///save a chain to the database.
     async fn save_chain<B>(&self, chain: &BlockChain<B>) -> Result<(), HError>
         where B: Block
     {
         //open a file to save the chain, named with bundle_file.
         let mut bundle_file = self.bundle_file.clone();   
+        Ok(())
         
     }
+
+    async fn find_chain<B>(&self, uuid: UuidBytes) -> Option<BlockChain<B>>
+        where B: Block
+    {
+        None
+    }
+    //-------------------------------------------------
 }
 
 

@@ -1,5 +1,3 @@
-/// Serialize and Deserialize Rust data structures to and from bytes.
-
 
 use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
 use bincode::{Decode, Encode};
@@ -16,34 +14,47 @@ const  BUFFER_SIZE: usize = 1024 * 128;
 
 
 #[async_trait]
-pub trait Serializer
+trait Serialize
 {
     type DataType: Encode + Decode<()> + Sized + Send + Unpin;
     /// have a buffer
     fn buffer(&mut self) -> &mut [u8];
     //have its data
-    fn data(&self) -> Self::DataType;
+    fn data(&mut self) -> Option<Self::DataType>;
     //resize the buffer
     fn resize_buffer(&mut self, size: usize) -> Result<(), HError>;
 
 
     ///encode into bytes with bigendian, just wrap the bincode::encode_into_slice 
-    fn encode_into_slice(&self, dst: &mut [u8]) -> Result<usize, HError>{
+    fn encode_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError>{
         let config  = bincode::config::standard()
             .with_big_endian();
 
-        let val = self.data();
+        let val_opt = self.data();
 
-        let size = bincode::encode_into_slice(val, dst, config)
-            .map_err(|e|
-                HError::Message {
-                    message: format!("error in serializer encode_into_slice
-                        error: {}", e
+        match val_opt {
+            Some(val) => {
+                let size = bincode::encode_into_slice(val, dst, config)
+                    .map_err(|e|
+                        HError::Message {
+                            message: format!("error in serializer encode_into_slice
+                                error: {}", e
+                            )
+                        }
                     )
-                }
-            )
-        ?;
-        Ok(size)
+                ?;
+                Ok(size)
+            }
+            None => {
+                return Err(
+                    HError::Message {
+                        message: format!("error in serializer encode_into_slice
+                            error: {}", "no data")
+                    }
+                );
+            }
+        }
+
     }
 
     ///decode from bytes with bigendian, just wrap the bincode::decode_from_slice 
@@ -209,6 +220,78 @@ pub trait Serializer
     }
 
 }
+
+/// This is a serializer, we use this serializer to serialize data.
+pub struct Serializer <T> 
+    where T: Sized + Encode + Decode<()> + Send
+{
+    buffer: Vec<u8>,
+    data: Option<T>
+}
+
+impl  <T> Serializer <T> 
+    where T: Sized + Encode + Decode<()> + Send + Unpin
+{
+    ///create a new serializer with or without data
+    /// # Arguments
+    /// * `data` - the data we want to serialize, if is optional,
+    pub fn new(data: Option<T>) -> Self {
+        let buffer_size = estimate_serialized_size::<T>();
+        Serializer { 
+            buffer: vec![0u8; buffer_size], 
+            data: data
+        }
+    }
+
+
+    ///set the data for the serializer, cosunme the serializer
+    /// then return a new serializer with the data setted.
+    pub fn set_data(mut self, data: T) -> Self {
+        self.data = Some(data);
+        self
+    }
+
+    ///return a reference of the data of the serializer if we have it.
+
+    pub fn get_data(&self) -> Option<&T> {
+        self.data.as_ref()
+    }
+
+    ///encode the data into a given buffer, and return the size of the encoded data.
+    ///just wrap the encode_into_slice function in trait Serialize.
+    pub fn encode_into(&mut self, buffer: &mut [u8]) -> Result<usize, HError> {
+       self.encode_into_slice(buffer)
+    }
+    
+
+}
+
+///impl Serialize for Serializer<T>  
+/// # Note
+/// * we impl this trait for Serializer<T>, so we can use the Serializer<T>
+/// as a serializer.
+impl <T> Serialize for Serializer<T>  
+    where T: Sized + Encode + Decode<()> + Send + Unpin
+{
+    type DataType = T;
+    
+    ///get the buffer of the serializer
+    fn buffer(&mut self) ->  &mut [u8] {
+        self.buffer.as_mut_slice()
+    }
+
+    ///resize the buffer of the serializer
+    fn resize_buffer(&mut self,size:usize) -> Result<(),HError> {
+        self.buffer.resize(size, 0);
+        Ok(())
+    }
+
+    ///get the data of the serializer
+    fn data(&mut self) -> Option<T> {
+        self.data.take()
+    }
+}
+
 
 mod helpers{
     use super::*;
