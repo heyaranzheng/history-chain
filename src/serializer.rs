@@ -133,10 +133,10 @@ pub trait Serialize
             return Ok(0);
         }
 
-        let header_size = u32::from_be_bytes(header_bytes);
+        let bytes_size = u32::from_be_bytes(header_bytes);
 
         //check if the buffer is too small
-        if buffer.len() < header_size as usize{
+        if buffer.len() < bytes_size as usize{
             return Err(
                 HError::Message { 
                     message:  format!("the given buffer is too small 
@@ -148,9 +148,9 @@ pub trait Serialize
         }
 
         //get the bytes from the stream
-        stream.read_exact(&mut buffer[..header_size as usize]).await?;
+        stream.read_exact(&mut buffer[..bytes_size as usize]).await?;
 
-        return Ok(header_size as usize);
+        return Ok(bytes_size as usize);
     }
 
     async fn decode_from_asyncread<R>(stream: &mut R) -> Result<Self::DataType, HError>
@@ -237,7 +237,7 @@ impl  <T> Serializer <T>
     /// * `data` - the data we want to serialize, if is optional,
     pub fn new(data: Option<T>) -> Self {
         let buffer_size = estimate_serialized_size::<T>();
-        Serializer { 
+        Serializer::<T> { 
             buffer: vec![0u8; buffer_size], 
             data: data
         }
@@ -339,9 +339,47 @@ mod helpers{
 mod tests{
     use super::*;
 
-    #[test]
-    fn test_encode_into_slice() {
+    #[tokio::test]
+    async fn test_serializer() {
+        //create a new serializer with no data
+        let test_ser= Serializer::<String>::new(None);
+        let data = "i am a test string".to_string();
+
+        //--------------test set_data()-------------------------------------
+        let mut test_ser = test_ser.set_data(data);
+        assert_eq!(test_ser.get_data().unwrap(), "i am a test string");
         
+        //--------------test decode_into_slice() decode_from_slice()----------
+        let mut dst = vec![0u8; 100];
+        let result = test_ser.encode_into_slice(&mut dst);
+        assert_eq!(result.is_ok(), true);
+        let size = result.unwrap();
+        let result = 
+            Serializer::<String>::decode_from_slice(&dst[..size]);
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap(), "i am a test string".to_string());
+
+       
+        //create a file for test
+        let result = tokio::fs::File::options()
+            .write(true)
+            .create(true)
+            .open("test.file")
+            .await;
+        assert_eq!(result.is_ok(), true);
+        let mut stream = result.unwrap();
+
+        //--------------test save_into_asyncwrite() ---------------------
+        let result = 
+            test_ser.save_into_asyncwrite(&mut stream).await;
+        assert_eq!(result.is_ok(), true);
+        let size = result.unwrap();
+
+
+        //remove the file
+        let result = tokio::fs::remove_file("test.file").await;
+        assert_eq!(result.is_ok(), true);
+
     }
 
 }
