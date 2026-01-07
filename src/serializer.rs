@@ -14,7 +14,7 @@ const  BUFFER_SIZE: usize = 1024 * 128;
 
 
 #[async_trait]
-trait Serialize
+pub trait Serialize
 {
     type DataType: Encode + Decode<()> + Sized + Send + Unpin;
     /// have a buffer
@@ -255,14 +255,7 @@ impl  <T> Serializer <T>
 
     pub fn get_data(&self) -> Option<&T> {
         self.data.as_ref()
-    }
-
-    ///encode the data into a given buffer, and return the size of the encoded data.
-    ///just wrap the encode_into_slice function in trait Serialize.
-    pub fn encode_into(&mut self, buffer: &mut [u8]) -> Result<usize, HError> {
-       self.encode_into_slice(buffer)
-    }
-    
+    }    
 
 }
 
@@ -346,5 +339,9 @@ mod helpers{
 mod tests{
     use super::*;
 
+    #[test]
+    fn test_encode_into_slice() {
+        
+    }
 
 }
