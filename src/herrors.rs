@@ -7,6 +7,8 @@ use log;
 
 #[derive(Error, Debug)]
 pub enum HError {
+    #[error("Error: {message}\n")]
+    UnexpectedEnd {message: String},
 
     #[error("Error: {message}\n")]
     Message {message: String},

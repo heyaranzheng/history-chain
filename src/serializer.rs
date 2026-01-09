@@ -1,6 +1,6 @@
 
 use tokio::io::{AsyncWrite, AsyncRead, AsyncWriteExt, AsyncReadExt};
-use bincode::{Decode, Encode};
+use bincode::{Decode, Encode, error::EncodeError};
 use async_trait::async_trait;
 use std::marker::Unpin;
 
@@ -10,6 +10,7 @@ use crate::herrors::HError;
 use helpers::*;
 /// 128 kB buffer size, in function save_into_stream,
 const  BUFFER_SIZE: usize = 1024 * 128;
+const  BIGGEST_BUFFER_SIZE: usize = 1024 * BUFFER_SIZE;
 
 
 
@@ -34,17 +35,52 @@ pub trait Serialize
 
         match val_opt {
             Some(val) => {
-                let size = bincode::encode_into_slice(val, dst, config)
-                    .map_err(|e|
-                        HError::Message {
-                            message: format!("error in serializer encode_into_slice
-                                error: {}", e
+                
+                //try to encode the data into the buffer, if the buffer is not enough, resize it.
+                let  mut size = self.buffer().len();
+                loop {
+                    match bincode::encode_into_slice(&val, dst, config) {
+                        //the error means the buffer is not enough, resize it and try again.
+                        Err(EncodeError::UnexpectedEnd) => {
+                            size *= 2;
+
+                            //check if the buffer is too big to use a lot of memory.
+                            //if the size of buffer is over BIGGEST_BUFFER_SIZE, return an error
+                            if size > BIGGEST_BUFFER_SIZE {
+                                return Err(
+                                    HError::Message { 
+                                        message: format!("the buffer is 
+                                        too big to use a lot of memory, 
+                                        size: {}", size)
+                                    }
+                                )
+                            }
+
+                            //resize the buffer and try again.
+                            self.resize_buffer(size)?;
+                            continue;
+                        }
+
+                        //if we get an other error, break and return the error
+                        Err(e) => {
+                            return Err(
+                                HError::Message { 
+                                    message: 
+                                        format!("error in serializer encode_into_slice {}" ,e)
+                                }
                             )
                         }
-                    )
-                ?;
-                Ok(size)
+
+                        //the buffer is enough, return the size of bytes
+                        Ok(size) => {
+                            return Ok(size);
+                        }
+                    }
+                    
+                }
             }
+
+            // we have no data in the serializer, return an error
             None => {
                 return Err(
                     HError::Message {
@@ -58,17 +94,18 @@ pub trait Serialize
     }
 
     ///decode from bytes with bigendian, just wrap the bincode::decode_from_slice 
-    fn decode_from_slice(src: &[u8]) -> Result<Self::DataType, HError>{
+    fn decode_from_slice(src: &[u8]) -> Result<Self::DataType, HError>
+    {
         let config  = bincode::config::standard()
             .with_big_endian();
-        let (val, _) = bincode::decode_from_slice::<Self::DataType, _>(src, config)
+        let (val, _) = 
+            bincode::decode_from_slice::<Self::DataType, _>(src, config)
             .map_err( |e| 
                 HError::Message { message:  
                     format!("deserialize error: {}", e)
                 }
             )?;
         Ok(val)
-
     }
 
     ///save it into a async stream, return the size of the serialized data
@@ -79,100 +116,129 @@ pub trait Serialize
         let config = bincode::config::standard()
             .with_big_endian();
 
-        //create a buffer with the estimated size
-        let buffer_size = estimate_serialized_size::<Self::DataType>();
-
         //get the data first
         let data = self.data();
+        match data {  
+            //if we can't get the data, return an error   
+            None => {
+                return Err(
+                    HError::Message { message: 
+                        format!("error in save_into_asyncwrite
+                            error: {}", "no data")
+                    }
+                );
+            }
 
-        //get the our own buffer's length, if it is not enough, resize it
-        let my_buffer_size = self.buffer().len();
-        if my_buffer_size < buffer_size {
-            self.resize_buffer(buffer_size)?;
+            //if we have the data, enncode it into the buffer, and write 
+            //it into the stream.
+            Some(data) => {
+                //encode the data into the buffer, and get the size of bytes
+                let header_size: u32;
+                let buffer = self.buffer();
+                
+                let total_size: usize;
+                let bytes_encoded = 
+                    bincode::encode_into_slice(data, &mut buffer[4..], config)
+                    .map_err(|e|
+                        HError::Message { message: 
+                            format!("errror in encode_into_slice 
+                                error: {}", e)
+                        }
+                    )?;
+                header_size = bytes_encoded as u32;
+                total_size = 4 + bytes_encoded;
+                
+                //add the header size to the buffer
+                let header_bytes = header_size.to_be_bytes() as [u8;4];
+                buffer[0..4].copy_from_slice(&header_bytes);
+
+                //write the effective buffer into the stream
+                stream.write_all(&buffer[..total_size]).await?;
+
+                return Ok(total_size);
+            }            
         }
-        let buffer = self.buffer();
-        
-        //encode the data into the buffer, and get the size of bytes
-        let header_size: u32;
-        let total_size: usize;
-        let bytes_encoded = 
-            bincode::encode_into_slice(data, &mut buffer[4..], config)
-            .map_err(|e|
-                HError::Message { message: 
-                    format!("errror in encode_into_slice 
-                        error: {}", e)
-                }
-            )?;
-        header_size = bytes_encoded as u32;
-        total_size = 4 + bytes_encoded;
-
-        //add the header size to the buffer
-        let header_bytes = header_size.to_be_bytes() as [u8;4];
-        buffer[0..4].copy_from_slice(&header_bytes);
-
-        //write the effective buffer into the stream
-        stream.write_all(&buffer[..total_size]).await?;
-
-        return Ok(total_size);
     }
 
-    ///this funcion resolve a header, get out the fixed number of bytes according 
-    /// the header from the stream WITHOUT DECODING
-    async fn read_bytes_from_asyncread<R>(stream: &mut R, buffer: &mut [u8]) 
-        -> Result<usize, HError> 
-        where R: AsyncRead + Unpin + Send
-    {
-        //read the header size from the stream
-        let mut header_bytes = [0u8; 4];
-
-        //try to read some bytes from the stream.
-        let nread = stream.read_exact(&mut header_bytes).await?;
-
-        //if we can't get anything, we just return 0
-        if nread == 0 {
-            return Ok(0);
-        }
-
-        let bytes_size = u32::from_be_bytes(header_bytes);
-
-        //check if the buffer is too small
-        if buffer.len() < bytes_size as usize{
+    ///get the header from the buffer.
+    fn get_header(buffer: &[u8]) -> Result<usize, HError> {
+        //check if the buffer is valid
+        if buffer.len() < 4 {
             return Err(
                 HError::Message { 
-                    message:  format!("the given buffer is too small 
-                        for store the encode bytes in functiin read_from_
-                        asyncread
-                    ")
+                    message: format!("the buffer is not valid")   
                 }
             );
         }
 
-        //get the bytes from the stream
-        stream.read_exact(&mut buffer[..bytes_size as usize]).await?;
+        //try to get the header size        
+        let mut header_bytes = [0u8;4];
+        header_bytes.copy_from_slice(&buffer[0..4]);
 
-        return Ok(bytes_size as usize);
+        let size = u32::from_be_bytes(header_bytes) as usize;
+        Ok(size)
     }
 
-    async fn decode_from_asyncread<R>(stream: &mut R) -> Result<Self::DataType, HError>
+    ///fill the serializer's buffer with the bytes from the stream, if it is not
+    /// enough, create a new temporary buffer to hold the data. 
+    async fn decode_from_asyncread<R>(&mut self, stream: &mut R) -> Result<Vec<Self::DataType>, HError>
         where R: AsyncRead + Unpin + Send
     {
-        //get the bytes from the steam
-        let buffer_size = estimate_serialized_size::<Self::DataType>();
-        let mut buffer = vec![0u8; buffer_size];
-        let size = Self::read_bytes_from_asyncread(stream, &mut buffer[..]).await?;
+        let vec_ret = Vec::new::<Self::DataType>();
+        //get the buffer of serializer
+        let buffer = self.buffer();
+        let buffer_size = buffer.len();
+    
+        //fill the buffer from the stream
+        let nread = stream.read_exact(&mut buffer).await?;
+        
+        //check the nread
+        match nread {
+            //0 means we get nothing from the stream, return an empty vector
+            0 => {
+                return Ok(vec_ret);
+            }
 
-        //check if we read some thing.
-        if size == 0 {
-            return Err(
-                HError::Message { 
-                    message: format!("read nothing in the stream")
+            //the buffer is filled, but the data may be imcomplete, so we need to 
+            //create a new temporary buffer to hold the data.
+            buffer_size => {
+                let mut vec_buffer: Vec<Vce<u8>>;
+                let new_buffer_size = buffer.len();
+                loop {
+                    //check if the buffer is too big to use a lot of memory.
+                    if new_buffer_size > BIGGEST_BUFFER_SIZE {
+                        new_buffer_size = BIGGEST_BUFFER_SIZE;
+                    }else {
+                        new_buffer_size *= 2;
+                    }
+                    
+                    let new_buffer = vec![0u8; new_buffer_size];
+                    let nread = stream.read_exact(&mut new_buffer).await?;
+
+                    //check the result of read_exact
+                    if nread == 0 {
+                        //we have nothing to read from the stream, break and return the vec_buffer
+                        break;
+                    }else if nread ==  new_buffer_size {
+                        //the buffer is filled, add it to the vec_buffer
+                        vec_buffer.push(new_buffer);
+                        //may the data is not complete, so we need to read more.
+                        continue;
+                    }else { 
+                        //the data in the stream is complete, add it to the vec_buffer
+                        vec_buffer.push(new_buffer[..nread].to_vec());
+                        //break and return the vec_buffer   
+                        break;
+                    }
                 }
-            )
+                // all the data in the stream is complete, decode it one by one.
+                
+            }
+             
         }
-        //decode it 
-        let val = Self::decode_from_slice(&mut buffer[..size])?;
-
-        Ok(val)
+        
+        
+        Ok(vec_ret)
     }
 
 
@@ -230,13 +296,13 @@ pub struct Serializer <T>
 }
 
 impl  <T> Serializer <T> 
-    where T: Sized + Encode + Decode<()> + Send + Unpin
+    where T: Sized + Encode + Decode<()> + Send + Unpin 
 {
     ///create a new serializer with or without data
     /// # Arguments
     /// * `data` - the data we want to serialize, if is optional,
     pub fn new(data: Option<T>) -> Self {
-        let buffer_size = estimate_serialized_size::<T>();
+        let buffer_size  estimate_serialized_size::<T>();
         Serializer::<T> { 
             buffer: vec![0u8; buffer_size], 
             data: data
@@ -307,36 +373,14 @@ mod helpers{
         }
     }
 
-    ///this function is used etismate thhe size of the serialized data.
     
-    pub(super) fn estimate_serialized_size<T: Sized>() -> usize {
-        //the size of the struct itself
-        let two_times_struct_size = std::mem::size_of::<T>() * 2;
-
-        //the size of the default buffer
-        let default_buffer_size = BUFFER_SIZE;
-
-        //check if the size of the struct is much smaller or larger than the 
-        //default buffer size.
-        let magnitude = two_times_struct_size as f64 / default_buffer_size as f64;
-        
-        //two_times_struct_size is greater or much more smaller than default_buffer_size,
-        //we set the size with the magnitude of two_times_struct_size
-        if magnitude < 0.2 || magnitude > 1.0 {
-            //align the size to 128 bytes
-            return size_to_align(two_times_struct_size, 128);
-        }else {
-            //  magitude is between 0.2 and 1,
-            // we just use the default buffer size
-            return default_buffer_size;
-        }        
-    }
-
 }
 
 
 #[cfg(test)]
 mod tests{
+    use tokio::io::AsyncSeekExt;
+
     use super::*;
 
     #[tokio::test]
@@ -346,7 +390,7 @@ mod tests{
         let data = "i am a test string".to_string();
 
         //--------------test set_data()-------------------------------------
-        let mut test_ser = test_ser.set_data(data);
+        let mut test_ser = test_ser.set_data(data.clone());
         assert_eq!(test_ser.get_data().unwrap(), "i am a test string");
         
         //--------------test decode_into_slice() decode_from_slice()----------
@@ -364,22 +408,47 @@ mod tests{
         let result = tokio::fs::File::options()
             .write(true)
             .create(true)
+            .read(true)
             .open("test.file")
             .await;
         assert_eq!(result.is_ok(), true);
         let mut stream = result.unwrap();
 
-        //--------------test save_into_asyncwrite() ---------------------
+        //reset the data in the serializer
+        test_ser = test_ser.set_data(data);
+
+        //--------------test save_into_asyncwrite() 
+        //--------------test read_from_asyncread()---------------------
         let result = 
             test_ser.save_into_asyncwrite(&mut stream).await;
+        stream.flush().await.unwrap();
         assert_eq!(result.is_ok(), true);
         let size = result.unwrap();
 
+        //set the seek position to the beginning of the file
+        let result = stream.seek(tokio::io::SeekFrom::Start(0)).await;
+        assert_eq!(result.is_ok(), true);
 
+        let mut buffer = [0u8; 4];
+        let result = stream.read_exact(&mut buffer).await;
+        if result.is_err() {
+            println!("error in read_exact: {}", result.unwrap_err());
+        }
+        let header_size = u32::from_be_bytes(buffer);
+        assert_eq!(header_size, (size - 4) as u32);
+        
+        let result = 
+            Serializer::<String>::decode_from_asyncread(&mut stream).await;
+        assert_eq!(result.is_ok(), true);
+
+        
         //remove the file
         let result = tokio::fs::remove_file("test.file").await;
         assert_eq!(result.is_ok(), true);
 
+
+
     }
+
 
 }
