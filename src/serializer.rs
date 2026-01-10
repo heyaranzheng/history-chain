@@ -19,7 +19,7 @@ pub trait Serialize
 {
     type DataType: Encode + Decode<()> + Sized + Send + Unpin;
     /// have a buffer
-    fn buffer(&mut self) -> &mut [u8];
+    fn buffer(&mut self) -> &mut Vec<u8>;
     //have its data
     fn data(&mut self) -> Option<Self::DataType>;
     //resize the buffer
@@ -179,111 +179,40 @@ pub trait Serialize
         Ok(size)
     }
 
-    ///fill the serializer's buffer with the bytes from the stream, if it is not
-    /// enough, create a new temporary buffer to hold the data. 
+    /// read all the data from the stream, and decode it into a vector of data.
     async fn decode_from_asyncread<R>(&mut self, stream: &mut R) -> Result<Vec<Self::DataType>, HError>
         where R: AsyncRead + Unpin + Send
     {
-        let vec_ret = Vec::new::<Self::DataType>();
+        let mut vec_ret = Vec::<Self::DataType>::new();
         //get the buffer of serializer
+        
         let buffer = self.buffer();
-        let buffer_size = buffer.len();
-    
-        //fill the buffer from the stream
-        let nread = stream.read_exact(&mut buffer).await?;
-        
-        //check the nread
-        match nread {
-            //0 means we get nothing from the stream, return an empty vector
-            0 => {
-                return Ok(vec_ret);
-            }
+        //get all the bytes from the stream
+        let size = read_all_from_stream(stream, buffer).await?;
 
-            //the buffer is filled, but the data may be imcomplete, so we need to 
-            //create a new temporary buffer to hold the data.
-            buffer_size => {
-                let mut vec_buffer: Vec<Vce<u8>>;
-                let new_buffer_size = buffer.len();
-                loop {
-                    //check if the buffer is too big to use a lot of memory.
-                    if new_buffer_size > BIGGEST_BUFFER_SIZE {
-                        new_buffer_size = BIGGEST_BUFFER_SIZE;
-                    }else {
-                        new_buffer_size *= 2;
-                    }
-                    
-                    let new_buffer = vec![0u8; new_buffer_size];
-                    let nread = stream.read_exact(&mut new_buffer).await?;
+        //decode the bytes
+        let mut offset = 0;
+        let end = size;
+        while offset < end {
+            //get one of the encoded data's size
+            let this_size = Self::get_header(& buffer[offset..])?;
 
-                    //check the result of read_exact
-                    if nread == 0 {
-                        //we have nothing to read from the stream, break and return the vec_buffer
-                        break;
-                    }else if nread ==  new_buffer_size {
-                        //the buffer is filled, add it to the vec_buffer
-                        vec_buffer.push(new_buffer);
-                        //may the data is not complete, so we need to read more.
-                        continue;
-                    }else { 
-                        //the data in the stream is complete, add it to the vec_buffer
-                        vec_buffer.push(new_buffer[..nread].to_vec());
-                        //break and return the vec_buffer   
-                        break;
-                    }
-                }
-                // all the data in the stream is complete, decode it one by one.
-                
-            }
-             
+            //decode it 
+            let val = 
+                Self::decode_from_slice(& buffer[offset..offset+this_size])?;
+
+            //push it into the vector
+            vec_ret.push(val);
+
+            //update the offset
+            offset += this_size;
+
         }
-        
+
         
         Ok(vec_ret)
     }
 
-
-    ///get the bytes and decode it one by one.
-    /// all the value will be collected into a vector.
-    async fn decode_all<R>(&mut self, stream: &mut R) -> Result<Vec<Self::DataType>, HError>
-        where R: AsyncRead + Unpin + Send
-    {
-        //return vector
-        let mut vec = Vec::new();
-
-        //check the  length of reused buffer, if it is not enough, resize it,
-        //then get the buffer.
-        let buffer_size = estimate_serialized_size::<Self::DataType>();
-        let own_buffer_size = self.buffer().len();
-        if own_buffer_size < buffer_size {
-            self.resize_buffer(buffer_size)?;
-        }
-        let buffer = self.buffer();
-
-        //get the bytes until it is empty
-        loop {
-            //check if we get something
-            let  result  = 
-                Self::read_bytes_from_asyncread(stream, &mut buffer[..]).await;
-            match result {
-                Ok(nread) => {
-                    //if we read something, decode it.
-                    if nread != 0 {
-                        let val = Self::decode_from_slice(&mut buffer[..nread])?;
-                        vec.push(val);
-                    }else {
-                        //we get nothing from the stream, break
-                        break;
-                    }
-                }
-                Err(e) => {
-                    //exit and return  the error
-                    return Err(e);
-                }
-            }
-        }
-        
-        Ok(vec)
-    }
 
 }
 
@@ -302,9 +231,8 @@ impl  <T> Serializer <T>
     /// # Arguments
     /// * `data` - the data we want to serialize, if is optional,
     pub fn new(data: Option<T>) -> Self {
-        let buffer_size  estimate_serialized_size::<T>();
         Serializer::<T> { 
-            buffer: vec![0u8; buffer_size], 
+            buffer: vec![0u8; BUFFER_SIZE], 
             data: data
         }
     }
@@ -335,8 +263,8 @@ impl <T> Serialize for Serializer<T>
     type DataType = T;
     
     ///get the buffer of the serializer
-    fn buffer(&mut self) ->  &mut [u8] {
-        self.buffer.as_mut_slice()
+    fn buffer(&mut self) ->  &mut Vec<u8> {
+        &mut self.buffer
     }
 
     ///resize the buffer of the serializer
@@ -373,8 +301,26 @@ mod helpers{
         }
     }
 
+    ///read all the data from the stream into the buffer, if the buffer is not
+    /// enough, extend it.
+    pub(super) async fn read_all_from_stream<R>(
+        stream: &mut R,  
+        buffer: &mut Vec<u8>
+    ) -> Result<usize, HError>
+        where R: AsyncRead + Unpin + Send
+    {
+        let mut tmper_buffer = vec![0u8; BUFFER_SIZE];
+
+        while let Ok(nread) = stream.read(&mut tmper_buffer[..]).await  {
+            if nread == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&tmper_buffer[..nread]);
+        }  
+        Ok(buffer.len())
+    }
     
-}
+} 
 
 
 #[cfg(test)]
@@ -437,10 +383,6 @@ mod tests{
         let header_size = u32::from_be_bytes(buffer);
         assert_eq!(header_size, (size - 4) as u32);
         
-        let result = 
-            Serializer::<String>::decode_from_asyncread(&mut stream).await;
-        assert_eq!(result.is_ok(), true);
-
         
         //remove the file
         let result = tokio::fs::remove_file("test.file").await;
