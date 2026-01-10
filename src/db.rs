@@ -1,6 +1,6 @@
 use bincode::{Decode, Encode};
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, AsyncRead};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{ Path, PathBuf};
@@ -15,6 +15,7 @@ use crate:: uuidbytes::UuidBytes;
 use crate::chain::{self, ChainLimit, BlockChain, ChainRef, ChainInfoBuilder};
 use crate::block::{Block, DataBlock, DataBlockArgs, DigestBlock, DigestBlockArgs};
 use crate::constants::MAX_FILE_NAME_LEN;
+use crate::serializer::{Serialize, Serializer};
 
 ///A saver is responsible for saving the data to some storage.
 #[async_trait]
@@ -369,14 +370,64 @@ impl DataBase for FileDataBase {
 ///  * origin: the origin timestamp of the bundle.
 ///  * time_gap: the biggest timestamp gap we can accept in this bundle.
 ///  * max_len: the max length of the block chains in this bundle.
+#[derive(Debug, Clone, Decode, Encode)]
 pub struct Bundle <B>
-    where B: Block
+    where B: Block + Encode + Decode<()> + Send + Unpin, 
 {
     chains: Vec<BlockChain<B>>,
     counter: u32,
     origin: u64,
     time_gap: u64,
     max_len: u32,
+}
+
+impl <B> Bundle <B> 
+    where B: Block + Encode + Decode<()> + Send + Unpin,
+{
+    pub fn empty_new() -> Self {
+        Self {
+            chains: Vec::new(),
+            counter: 0,
+            origin: 0,
+            time_gap: 0, 
+            max_len: 0,
+        }
+    }
+
+    ///this function will take the ownership of the bundle, and return the 
+    /// onwership of it back.
+    async fn serializer_to_stream<R> (self, stream: &mut R) -> Result<Self, HError>
+        where  R: AsyncWrite + Unpin + Send
+
+    {
+        //create a serializer with self, 
+        let mut serializer = Serializer::<Self>::new(Some(self));
+        serializer.save_into_asyncwrite(stream).await?;
+
+        //take out of the self from the serializer
+        let result = serializer.take_data();
+        match result {
+            Some(self_back) => {
+                return Ok(self_back)
+            }
+            None => {
+                return Err(
+                    HError::Message { 
+                        message: format!("serializer take data failed") 
+                    }
+                );
+            }
+        }
+    }
+
+    async fn decode_from_stream<R> (stream: &mut R) -> Result<Vec<Self>, HError>
+        where R: AsyncRead + Unpin + Send
+    {
+        let mut serializer = Serializer::<Self>::new(None);
+        serializer.decode_from_asyncread(stream).await
+    }
+
+    
 }
 
 

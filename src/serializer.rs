@@ -13,25 +13,27 @@ const  BUFFER_SIZE: usize = 1024 * 128;
 const  BIGGEST_BUFFER_SIZE: usize = 1024 * BUFFER_SIZE;
 
 
-
 #[async_trait]
 pub trait Serialize
 {
     type DataType: Encode + Decode<()> + Sized + Send + Unpin;
     /// have a buffer
     fn buffer(&mut self) -> &mut Vec<u8>;
-    //have its data
-    fn data(&mut self) -> Option<Self::DataType>;
+    //have its data, this will take the ownership of the data, and return it
+    fn take_data(&mut self) -> Option<Self::DataType>;
+    //set the data to the serializer
+    fn set_data(&mut self, data: Self::DataType);
     //resize the buffer
     fn resize_buffer(&mut self, size: usize) -> Result<(), HError>;
 
+    
 
     ///encode into bytes with bigendian, just wrap the bincode::encode_into_slice 
     fn encode_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError>{
         let config  = bincode::config::standard()
             .with_big_endian();
 
-        let val_opt = self.data();
+        let val_opt = self.take_data();
 
         match val_opt {
             Some(val) => {
@@ -117,7 +119,7 @@ pub trait Serialize
             .with_big_endian();
 
         //get the data first
-        let data = self.data();
+        let data = self.take_data();
         match data {  
             //if we can't get the data, return an error   
             None => {
@@ -138,7 +140,7 @@ pub trait Serialize
                 
                 let total_size: usize;
                 let bytes_encoded = 
-                    bincode::encode_into_slice(data, &mut buffer[4..], config)
+                    bincode::encode_into_slice(&data, &mut buffer[4..], config)
                     .map_err(|e|
                         HError::Message { message: 
                             format!("errror in encode_into_slice 
@@ -154,6 +156,9 @@ pub trait Serialize
 
                 //write the effective buffer into the stream
                 stream.write_all(&buffer[..total_size]).await?;
+
+                //return the data to the serializer
+                self.set_data(data);
 
                 return Ok(total_size);
             }            
@@ -239,13 +244,6 @@ impl  <T> Serializer <T>
     }
 
 
-    ///set the data for the serializer, cosunme the serializer
-    /// then return a new serializer with the data setted.
-    pub fn set_data(mut self, data: T) -> Self {
-        self.data = Some(data);
-        self
-    }
-
     ///return a reference of the data of the serializer if we have it.
 
     pub fn get_data(&self) -> Option<&T> {
@@ -275,9 +273,17 @@ impl <T> Serialize for Serializer<T>
     }
 
     ///get the data of the serializer
-    fn data(&mut self) -> Option<T> {
+    fn take_data(&mut self) -> Option<T> {
         self.data.take()
     }
+
+
+    ///set the data for the serializer, cosunme the serializer
+    /// then return a new serializer with the data setted.
+    fn set_data(&mut self, data: T)  {
+        self.data = Some(data);
+    }
+
 }
 
 
@@ -335,11 +341,11 @@ mod tests{
     #[tokio::test]
     async fn test_serializer() {
         //create a new serializer with no data
-        let test_ser= Serializer::<String>::new(None);
+        let mut test_ser= Serializer::<String>::new(None);
         let data = "i am a test string".to_string();
 
         //--------------test set_data()-------------------------------------
-        let mut test_ser = test_ser.set_data(data.clone());
+        test_ser.set_data(data.clone());
         assert_eq!(test_ser.get_data().unwrap(), "i am a test string");
         
         //--------------test decode_into_slice() decode_from_slice()----------
@@ -364,7 +370,7 @@ mod tests{
         let mut stream = result.unwrap();
 
         //reset the data in the serializer
-        test_ser = test_ser.set_data(data);
+        test_ser.set_data(data);
 
         //--------------test save_into_asyncwrite() 
         //--------------test read_from_asyncread()---------------------
@@ -403,6 +409,9 @@ mod tests{
 
 
     }
+
+
+        
 
 
 }
