@@ -188,15 +188,17 @@ pub trait Serialize
         
         let buffer = self.buffer();
         //get all the bytes from the stream
-        let size = read_all_from_stream(stream, buffer).await?;
+        let end = read_all_from_stream(stream, buffer).await?;
 
         //decode the bytes
         let mut offset = 0;
-        let end = size;
         while offset < end {
             //get one of the encoded data's size
             let this_size = Self::get_header(& buffer[offset..])?;
 
+            //add the offset of the header size
+            offset += 4;
+            
             //decode it 
             let val = 
                 Self::decode_from_slice(& buffer[offset..offset+this_size])?;
@@ -206,7 +208,6 @@ pub trait Serialize
 
             //update the offset
             offset += this_size;
-
         }
 
         
@@ -309,6 +310,7 @@ mod helpers{
     ) -> Result<usize, HError>
         where R: AsyncRead + Unpin + Send
     {
+        let mut total_size = 0;
         let mut tmper_buffer = vec![0u8; BUFFER_SIZE];
 
         while let Ok(nread) = stream.read(&mut tmper_buffer[..]).await  {
@@ -316,8 +318,9 @@ mod helpers{
                 break;
             }
             buffer.extend_from_slice(&tmper_buffer[..nread]);
+            total_size += nread;
         }  
-        Ok(buffer.len())
+        Ok(total_size)
     }
     
 } 
@@ -382,7 +385,16 @@ mod tests{
         }
         let header_size = u32::from_be_bytes(buffer);
         assert_eq!(header_size, (size - 4) as u32);
+
+        //set the seek position to the beginning of the data
+        let result = stream.seek(tokio::io::SeekFrom::Start(4)).await;
+        assert_eq!(result.is_ok(), true);
         
+        let result = test_ser.decode_from_asyncread(&mut stream).await;
+        assert_eq!(result.is_ok(), true);
+        assert_eq!(result.unwrap().pop().unwrap(), "i am a test string".to_string());
+
+
         
         //remove the file
         let result = tokio::fs::remove_file("test.file").await;
