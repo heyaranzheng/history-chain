@@ -223,6 +223,7 @@ pub trait Serialize
 }
 
 /// This is a serializer, we use this serializer to serialize data.
+#[derive(Clone)]
 pub struct Serializer <T> 
     where T: Sized + Encode + Decode<()> + Send
 {

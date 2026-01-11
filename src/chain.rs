@@ -1,11 +1,8 @@
 
 use std::collections::HashMap;
-use std::fmt::format;
 use std::marker::PhantomData;
-use std::iter::Iterator;
 use std::ops::{Deref, DerefMut};
 use bincode::{Decode, Encode};
-use sha2::digest;
 
 use crate::block::{Block, Carrier, Digester};
 use crate::constants::ZERO_HASH;

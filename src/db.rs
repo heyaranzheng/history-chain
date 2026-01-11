@@ -1,6 +1,6 @@
 use bincode::{Decode, Encode};
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, AsyncRead};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::{ Path, PathBuf};
@@ -12,7 +12,7 @@ use crate::hash::HashValue;
 use crate::herrors::{self, HError};
 use crate::network::Message;
 use crate:: uuidbytes::UuidBytes;
-use crate::chain::{self, ChainLimit, BlockChain, ChainRef, ChainInfoBuilder};
+use crate::chain::{self, ChainLimit, BlockChain, ChainRef, ChainInfoBuilder, Chain};
 use crate::block::{Block, DataBlock, DataBlockArgs, DigestBlock, DigestBlockArgs};
 use crate::constants::MAX_FILE_NAME_LEN;
 use crate::serializer::{Serialize, Serializer};
@@ -362,54 +362,133 @@ impl DataBase for FileDataBase {
 }
 
 
+const DEFAULT_BUNDLE_FILE: &str = "chains.bundle";
 
-///the data structure to store the block chains
-///# Note:
-///  * chains: the chains in this bundle.
-///  * counter: the counter of the bundle.
-///  * origin: the origin timestamp of the bundle.
-///  * time_gap: the biggest timestamp gap we can accept in this bundle.
-///  * max_len: the max length of the block chains in this bundle.
-#[derive(Debug, Clone, Decode, Encode)]
+///this is a package manager of some chains.
+/// We can use this to store chains into a bundle file.
+/// #Fields:
+/// `serializer`: the serializer of the bundle, we can use this to serialize a chain,
+/// then save it into a bundle file.
+/// 'counter': the number of chains in the bundle.
+/// 'origin': the origin of the timestamp of all the chains in the bundle.
+/// 'time_gap': the allowed biggest time gap between any two blocks, we can use 
+/// this to fingure out the limitation of the biggest timestamp of all chains.
+/// 'path': the path name of the bundle file.
+#[derive(Clone)]
 pub struct Bundle <B>
     where B: Block + Encode + Decode<()> + Send + Unpin, 
 {
-    chains: Vec<BlockChain<B>>,
+    serializer: Serializer<BlockChain<B>>,
     counter: u32,
     origin: u64,
     time_gap: u64,
-    max_len: u32,
+    path: String,
 }
 
 impl <B> Bundle <B> 
     where B: Block + Encode + Decode<()> + Send + Unpin,
 {
-    pub fn empty_new() -> Self {
-        Self {
-            chains: Vec::new(),
+    pub fn default_new() -> Self {
+        Self{
+            serializer: Serializer::<BlockChain<B>>::new(None),
             counter: 0,
             origin: 0,
             time_gap: 0, 
-            max_len: 0,
+            path: DEFAULT_BUNDLE_FILE.to_string(),
+        }
+    }
+
+    ///if we want to add a chain to the bundle file, we should first update the 
+    /// the descriptions of the bundle file.
+    fn update_description_with_chain(&mut self, chain: &BlockChain<B>) 
+    -> Result<(), HError> 
+    {
+        let time_gap = chain.gap();
+        
+        if let Some(origin) = chain.origin() {
+            //we have no chain yet, so we set the origin and time_gap.
+            if self.counter == 0 {
+                self.origin = origin;
+                self.time_gap = chain.gap();
+                self.counter = 1;
+            }else {
+                //caculate the time_gap and origin.
+                let time_max = (self.origin + self.time_gap).max(
+                        origin + time_gap
+                );
+
+                //update the origin, time_gap and the counter
+                self.origin = self.origin.min(origin);
+                self.time_gap = time_max - self.origin;
+                self.counter += 1;
+                
+            }
+        }
+
+        Ok(())
+        
+    }    
+
+    ///this function will save the block chain into bundle file.
+    /// the chain will be take the ownership, then return it back.
+    /// # Return Value:
+    /// * `Ok(chain)`: if we save the chain into the bundle file successfully.
+    /// * `Err(error)`: if we have an error when we save the chain into the bundle file.
+    pub async fn save_to_file(&mut self, chain: BlockChain<B> ) 
+    -> Result<BlockChain<B>, HError> 
+    { 
+        let path = self.path.clone();
+
+        let mut stream = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(path)
+            .await?;
+        //locate the position to write the data.
+        let save_pos = stream.stream_position().await?;
+
+        let chain =self.encode_to_stream(&mut stream, chain).await?;
+
+        //update the description of the bundle file.
+        let result = self.update_description_with_chain(&chain);
+        match result {
+            Ok(()) => {
+                return Ok(chain);
+            }
+            Err(e) => {
+                //we should delete the data we just wrote into the file.
+                stream.set_len(save_pos).await?;
+                return Err(e);
+            }
         }
     }
 
     ///this function will take the ownership of the bundle, and return the 
     /// onwership of it back.
-    async fn serializer_to_stream<R> (self, stream: &mut R) -> Result<Self, HError>
+    async fn encode_to_stream<R> (
+        &mut self, 
+        stream: &mut R, 
+        chain: BlockChain<B>
+    ) -> Result<BlockChain<B>, HError>
         where  R: AsyncWrite + Unpin + Send
 
     {
-        //create a serializer with self, 
-        let mut serializer = Serializer::<Self>::new(Some(self));
+        //get the bundle's serializer
+        let serializer = &mut self.serializer;
+
+        //set the data of the serializer with the given chain.
+        serializer.set_data(chain);
+
+        //serialize the data into the stream(the serializer will serialize it 
+        //and add a size header, then write it into the stream)
         serializer.save_into_asyncwrite(stream).await?;
 
+        //we should return the data we just took.
         //take out of the self from the serializer
         let result = serializer.take_data();
         match result {
-            Some(self_back) => {
-                return Ok(self_back)
-            }
             None => {
                 return Err(
                     HError::Message { 
@@ -417,16 +496,24 @@ impl <B> Bundle <B>
                     }
                 );
             }
+
+            Some(self_back) => {
+                //return the ownership of the data.
+                return Ok(self_back)
+            }
         }
     }
 
-    async fn decode_from_stream<R> (stream: &mut R) -> Result<Vec<Self>, HError>
-        where R: AsyncRead + Unpin + Send
+    ///read the bundle file and return a vector of chains.
+    pub async fn load_chains_from_bundle(&mut self) 
+        -> Result<Vec<BlockChain<B>>, HError> 
     {
-        let mut serializer = Serializer::<Self>::new(None);
-        serializer.decode_from_asyncread(stream).await
-    }
+        let path = self.path.clone();
+        let mut stream = tokio::fs::File::open(path).await?;
 
+        let serilizer =&mut self.serializer;
+        serilizer.decode_from_asyncread(&mut stream).await
+    }
     
 }
 
@@ -628,6 +715,19 @@ mod tests {
                 Err(e.into())
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_bundle_save_and_load() {
+        let path = "test.file";
+        let stream = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)
+            .await?;
+
+
     }
 
 }
