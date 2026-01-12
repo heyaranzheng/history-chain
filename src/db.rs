@@ -687,9 +687,6 @@ mod tests {
         }
 
 
-                    
-
-
         //clear the test directory after the test.
         let result = clear_test_dir().await;
         assert_eq!(result.is_ok(), true);
@@ -717,16 +714,45 @@ mod tests {
         }
     }
 
+    use crate::utils::faker_data_chain;
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bundle_save_and_load() {
-        let path = "test.file";
-        let stream = tokio::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)
-            .await?;
+        //create a vector with chains
+        let mut vec = Vec::new();
+        for i in 0..10 {
+            let result = 
+                faker_data_chain(10, i, 500);
+            assert_eq!(result.is_ok(), true);
+            let chain = result.unwrap();
+            vec.push(chain);
+        }
 
+        let mut bundle = Bundle::<DataBlock>::default_new();
+
+        //the chain ownership will be taken by the bundle, then return it back.
+        //we will use this vector to store the returned chains.
+        let mut vec_ret = Vec::new();
+        for chain in vec {
+            let result = 
+                bundle.save_to_file(chain).await;
+            assert_eq!(result.is_ok(), true);
+            let chain_ret = result.unwrap();
+            vec_ret.push(chain_ret);
+        }
+
+        //set the steam to the head of the bundle file.
+        
+
+        //load the chains from the bundle file.
+        let result = bundle.load_chains_from_bundle().await;
+        assert_eq!(result.is_ok(), true);
+        let chains = result.unwrap();
+    
+        assert_eq!(chains.len(), vec_ret.len());
+        assert_eq!(chains, vec_ret);
+
+        //remove the test file
+        let _ = tokio::fs::remove_file(bundle.path).await;
 
     }
 

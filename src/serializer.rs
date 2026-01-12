@@ -319,13 +319,36 @@ mod helpers{
     {
         let mut total_size = 0;
         let mut tmper_buffer = vec![0u8; BUFFER_SIZE];
+        let mut resize_time = 0;
 
         while let Ok(nread) = stream.read(&mut tmper_buffer[..]).await  {
             if nread == 0 {
                 break;
             }
+
+            //check if our own buffer is enough to hold the data
+            let buffer_len = buffer.len();
+            if buffer_len > total_size + nread {
+                //the buffer is enough, just copy the data into the buffer
+                buffer[total_size..total_size + nread].copy_from_slice(&tmper_buffer[..nread]);
+
+            }else if buffer_len < total_size + nread {
+                //the buffer is not enough, we need to extend it.
+                buffer.extend_from_slice(&tmper_buffer[..]);
+
+                //copy the data into the buffer
+                buffer[total_size..total_size + nread].copy_from_slice(&tmper_buffer[..nread]);
+
+                //resize the temper buffer, so when the next extend happens, the buffer
+                //will be bigger and bigger.
+                tmper_buffer.resize(BUFFER_SIZE * (resize_time + 1) * resize_time, 0);
+                resize_time += 1;
+
+            } 
+
             buffer.extend_from_slice(&tmper_buffer[..nread]);
             total_size += nread;
+            
         }  
         Ok(total_size)
     }
@@ -365,13 +388,14 @@ mod tests{
             .write(true)
             .create(true)
             .read(true)
+            .append(true)
             .open("test.file")
             .await;
         assert_eq!(result.is_ok(), true);
         let mut stream = result.unwrap();
 
         //reset the data in the serializer
-        test_ser.set_data(data);
+        test_ser.set_data(data.clone());
 
         //--------------test save_into_asyncwrite() 
         //--------------test read_from_asyncread()---------------------
@@ -392,14 +416,29 @@ mod tests{
         }
         let header_size = u32::from_be_bytes(buffer);
         assert_eq!(header_size, (size - 4) as u32);
+        
+        //clear the file
+        let result = stream.set_len(0).await;
+        assert_eq!(result.is_ok(), true);
+
+        //save the data twice, so we should get two data
+        test_ser.set_data(data.clone());
+        let _ = test_ser.save_into_asyncwrite(&mut stream).await;
+
+        test_ser.set_data(data.clone());
+        let _ = test_ser.save_into_asyncwrite(&mut stream).await;
 
         //set the seek position to the beginning of the data
-        let result = stream.seek(tokio::io::SeekFrom::Start(4)).await;
+        let result = stream.seek(tokio::io::SeekFrom::Start(0)).await;
         assert_eq!(result.is_ok(), true);
         
         let result = test_ser.decode_from_asyncread(&mut stream).await;
+        
+        
         assert_eq!(result.is_ok(), true);
-        assert_eq!(result.unwrap().pop().unwrap(), "i am a test string".to_string());
+        let mut vec_ret = result.unwrap();
+        assert_eq!(vec_ret.pop().unwrap(), "i am a test string".to_string());
+        assert_eq!(vec_ret.pop().unwrap(), "i am a test string".to_string());
 
 
         

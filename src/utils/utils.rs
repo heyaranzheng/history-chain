@@ -1,6 +1,6 @@
  
 #[cfg(test)]
-pub mod tools {
+pub(crate) mod tools {
     use std::sync::Arc;
 
     use tokio::sync::RwLock;

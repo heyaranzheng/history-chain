@@ -177,7 +177,7 @@ impl DigestBlockArgs {
 
 impl BlockArgs for DigestBlockArgs {}
 
-#[derive(Debug, Clone, Encode, Decode)]
+#[derive(Debug, Clone, Encode, Decode, PartialEq)]
 pub struct DataBlock {
     //the hash of the block
     pub hash: HashValue,
@@ -309,6 +309,7 @@ impl Carrier for DataBlock {
         self.data_uuid
     }
 }
+
 
 
 ///used to disgest a chain.
