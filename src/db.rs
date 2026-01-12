@@ -465,6 +465,13 @@ impl <B> Bundle <B>
         }
     }
 
+    ///this function will consume the vector of chains, when the 
+    async fn save_chains_to_bundle(&mut self, chains: Vec<BlockChain<B>>)
+        -> Result<Vec<BlockChain<B>>, HError> 
+    {
+        let vec = Vec::<BlockChain<B>>::new();
+        Ok(vec)
+    }
     ///this function will take the ownership of the bundle, and return the 
     /// onwership of it back.
     async fn encode_to_stream<R> (

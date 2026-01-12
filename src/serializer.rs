@@ -26,22 +26,41 @@ pub trait Serialize
     //resize the buffer
     fn resize_buffer(&mut self, size: usize) -> Result<(), HError>;
 
-    
-
-    ///encode into bytes with bigendian, just wrap the bincode::encode_into_slice 
-    fn encode_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError>{
+    /// just wrap the bincode::encode_into_slice, the src data is the data we stored 
+    /// in the serializer
+    fn encode_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError> {
         let config  = bincode::config::standard()
             .with_big_endian();
 
-        let val_opt = self.take_data();
+        let data_opt = self.take_data();
 
+        match data_opt {
+            Some(data) => {
+                bincode::encode_into_slice(&data, dst, config)
+                    .map_err(|e| HError::Message { message: format!("error in serializer encode_into_slice {}", e) })
+                    ?;
+                Ok(dst.len())
+            },
+            None => Err(HError::Message { message: "no data in serializer".to_string() })
+        }
+    }
+
+    ///encode the data into the buffer, and add a u32 to store the size of the bytes at
+    /// the beginning of the vector.
+    /// if the vector buffer is not enough, resize it and try again.   
+    fn encode_into_vec_with_header(&mut self, dst: &mut Vec<u8>) -> Result<usize, HError> {
+        let config  = bincode::config::standard()
+            .with_big_endian();
+        
+        let val_opt = self.take_data();
+        
         match val_opt {
             Some(val) => {
-                
+
                 //try to encode the data into the buffer, if the buffer is not enough, resize it.
-                let  mut size = self.buffer().len();
+                let  mut size = dst.len();
                 loop {
-                    match bincode::encode_into_slice(&val, dst, config) {
+                    match bincode::encode_into_slice(&val, &mut dst[4..], config) {
                         //the error means the buffer is not enough, resize it and try again.
                         Err(EncodeError::UnexpectedEnd) => {
                             size *= 2;
@@ -59,7 +78,7 @@ pub trait Serialize
                             }
 
                             //resize the buffer and try again.
-                            self.resize_buffer(size)?;
+                            dst.resize(size, 0);
                             continue;
                         }
 
@@ -75,10 +94,19 @@ pub trait Serialize
 
                         //the buffer is enough, return the size of bytes
                         Ok(size) => {
-                            return Ok(size);
+                            let total_size = 4 + size;
+                            
+                            let size_header = size as u32;
+                            //add the header size to the buffer
+                            let header_bytes = size_header.to_be_bytes() as [u8;4];
+                            dst[0..4].copy_from_slice(&header_bytes);
+
+                            //return the data to the serializer
+                            self.set_data(val);
+
+                            return Ok(total_size);
                         }
                     }
-                    
                 }
             }
 
@@ -92,7 +120,6 @@ pub trait Serialize
                 );
             }
         }
-
     }
 
     ///decode from bytes with bigendian, just wrap the bincode::decode_from_slice 
@@ -108,6 +135,49 @@ pub trait Serialize
                 }
             )?;
         Ok(val)
+    }
+
+    fn decode_from_slice_with_header(buffer: &[u8]) -> Result<Vec<Self::DataType>, HError>
+    {
+        //the vector to hold the decoded data
+        let mut  vec_ret = Vec::<Self::DataType>::new();
+
+        //get the length of the buffer
+        let end = buffer.len();
+
+        //decode the bytes
+        let mut offset = 0;
+        while offset < end {
+            //get one of the encoded data's size
+            let this_size = Self::get_header(& buffer[offset..])?;
+
+            //add the offset of the header size
+            offset += 4;
+            
+            //decode it 
+            let val = 
+                Self::decode_from_slice(& buffer[offset..offset+this_size])?;
+
+            //push it into the vector
+            vec_ret.push(val);
+
+            //update the offset
+            offset += this_size;
+        }
+
+        //check if the data is valid
+        if offset != end {
+            return Err(
+                HError::Message { 
+                    message: 
+                        format!("error in decode_from_slice_with_header, 
+                    we may have a invalid data") 
+                }
+            )
+        }
+        
+        Ok(vec_ret)
+
     }
 
     ///save it into a async stream, return the size of the serialized data
@@ -139,6 +209,7 @@ pub trait Serialize
                 let buffer = self.buffer();
                 
                 let total_size: usize;
+
                 let bytes_encoded = 
                     bincode::encode_into_slice(&data, &mut buffer[4..], config)
                     .map_err(|e|
@@ -165,6 +236,7 @@ pub trait Serialize
         }
     }
 
+
     ///get the header from the buffer.
     fn get_header(buffer: &[u8]) -> Result<usize, HError> {
         //check if the buffer is valid
@@ -188,35 +260,12 @@ pub trait Serialize
     async fn decode_from_asyncread<R>(&mut self, stream: &mut R) -> Result<Vec<Self::DataType>, HError>
         where R: AsyncRead + Unpin + Send
     {
-        let mut vec_ret = Vec::<Self::DataType>::new();
-        //get the buffer of serializer
         
         let buffer = self.buffer();
         //get all the bytes from the stream
-        let end = read_all_from_stream(stream, buffer).await?;
+        let nread = read_all_from_stream(stream, buffer).await?;
 
-        //decode the bytes
-        let mut offset = 0;
-        while offset < end {
-            //get one of the encoded data's size
-            let this_size = Self::get_header(& buffer[offset..])?;
-
-            //add the offset of the header size
-            offset += 4;
-            
-            //decode it 
-            let val = 
-                Self::decode_from_slice(& buffer[offset..offset+this_size])?;
-
-            //push it into the vector
-            vec_ret.push(val);
-
-            //update the offset
-            offset += this_size;
-        }
-
-        
-        Ok(vec_ret)
+        Self::decode_from_slice_with_header(&buffer[..nread])
     }
 
 
@@ -309,7 +358,7 @@ mod helpers{
         }
     }
 
-    ///read all the data from the stream into the buffer, if the buffer is not
+    ///read all the data from the stream into the vector buffer, if the buffer is not
     /// enough, extend it.
     pub(super) async fn read_all_from_stream<R>(
         stream: &mut R,  
@@ -373,14 +422,14 @@ mod tests{
         assert_eq!(test_ser.get_data().unwrap(), "i am a test string");
         
         //--------------test decode_into_slice() decode_from_slice()----------
-        let mut dst = vec![0u8; 100];
-        let result = test_ser.encode_into_slice(&mut dst);
+        let mut dst = vec![0u8; 4];
+        let result = test_ser.encode_into_vec_with_header(&mut dst);
         assert_eq!(result.is_ok(), true);
         let size = result.unwrap();
         let result = 
-            Serializer::<String>::decode_from_slice(&dst[..size]);
+            Serializer::<String>::decode_from_slice_with_header(&dst[..size]);
         assert_eq!(result.is_ok(), true);
-        assert_eq!(result.unwrap(), "i am a test string".to_string());
+        assert_eq!(result.unwrap()[0], "i am a test string".to_string());
 
        
         //create a file for test
