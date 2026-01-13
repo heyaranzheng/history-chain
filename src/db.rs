@@ -15,7 +15,7 @@ use crate:: uuidbytes::UuidBytes;
 use crate::chain::{self, ChainLimit, BlockChain, ChainRef, ChainInfoBuilder, Chain};
 use crate::block::{Block, DataBlock, DataBlockArgs, DigestBlock, DigestBlockArgs};
 use crate::constants::MAX_FILE_NAME_LEN;
-use crate::serializer::{Serialize, Serializer};
+use crate::serializer::{self, Serialize, Serializer};
 
 ///A saver is responsible for saving the data to some storage.
 #[async_trait]
@@ -466,12 +466,36 @@ impl <B> Bundle <B>
     }
 
     ///this function will consume the vector of chains, when the 
-    async fn save_chains_to_bundle(&mut self, chains: Vec<BlockChain<B>>)
-        -> Result<Vec<BlockChain<B>>, HError> 
+    async fn save_chains_to_bundle(&mut self, chains:& Vec<BlockChain<B>>)
+        -> Result<usize, HError> 
     {
-        let vec = Vec::<BlockChain<B>>::new();
-        Ok(vec)
+        let path = self.path.clone();
+        let serializer = &mut self.serializer;
+        
+        let size = serializer.encode_vec_into(chains)?;
+
+        let mut stream = tokio::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)
+            .await?;
+
+        let nwrite = stream.write(&serializer.buffer()[..size]).await?;
+
+        //check the result of the write operation.
+        if nwrite != size {
+            return Err(
+                HError::Message { message: 
+                    "write error in function ssave_chains_to_bundle".to_string() 
+                }
+            );
+        }
+
+        Ok(size)
     }
+
+    
     ///this function will take the ownership of the bundle, and return the 
     /// onwership of it back.
     async fn encode_to_stream<R> (
@@ -510,6 +534,7 @@ impl <B> Bundle <B>
             }
         }
     }
+
 
     ///read the bundle file and return a vector of chains.
     pub async fn load_chains_from_bundle(&mut self) 

@@ -28,7 +28,7 @@ pub trait Serialize
 
     /// just wrap the bincode::encode_into_slice, the src data is the data we stored 
     /// in the serializer
-    fn encode_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError> {
+    fn encode_data_into_slice(&mut self, dst: &mut [u8]) -> Result<usize, HError> {
         let config  = bincode::config::standard()
             .with_big_endian();
 
@@ -136,6 +136,52 @@ pub trait Serialize
             )?;
         Ok(val)
     }
+
+    ///If we have a vector of data, use this function to encode them into the 
+    /// serializer's buffer, and return the size of the serialized data.
+    /// #NOTE: each data will encoded then stored behind its size header.
+    /// So we can take it out easily.
+    fn encode_vec_into(&mut self,src: &Vec<Self::DataType>) -> Result<usize, HError>
+    {
+        let config = bincode::config::standard()
+            .with_big_endian();
+        let dst = self.buffer();
+        let time_resize = 1;
+
+        let mut offset = 0;
+        for data in src {
+            loop {
+                //leaev a palce for the size header
+                let result = 
+                    bincode::encode_into_slice(data, &mut dst[offset + 4..], config);
+                match result {
+                    // buffer is not enough, extend it, then retry
+                    Err(EncodeError::UnexpectedEnd) => {
+                        dst.resize(BUFFER_SIZE * (time_resize + 1) *time_resize, 0);
+                        continue;
+                    }
+                    Err(e) => {
+                        return Err(
+                            HError::Message { 
+                                message: 
+                                    format!("error in serializer encode_into_vec {}" ,e)
+                            }
+                        )
+                    }
+                    Ok(size) => {
+                        save_size_header_into_slice(size as u32, &mut dst[offset..])?;
+                        offset = offset + 4 + size;
+                        
+                        //we got a right size, break the loop
+                        break;
+                    }
+                }
+                
+            }
+        }
+        Ok(offset)
+    } 
+
 
     fn decode_from_slice_with_header(buffer: &[u8]) -> Result<Vec<Self::DataType>, HError>
     {
@@ -401,6 +447,16 @@ mod helpers{
         }  
         Ok(total_size)
     }
+
+    pub(super) fn save_size_header_into_slice(size: u32, dst: &mut [u8]) 
+    -> Result<(), HError> 
+    {
+        let size_bytes = size.to_be_bytes() as [u8;4];
+        //copy the size bytes into the dst
+        dst[..4].copy_from_slice(&size_bytes);
+        Ok(())
+    }
+
     
 } 
 
