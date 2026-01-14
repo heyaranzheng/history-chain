@@ -119,7 +119,7 @@ pub(crate) mod tools {
 
 #[cfg(test)]
 mod tests {
-    use crate::{chain::{Chain, ChainLimit}, keeper::Keeper};
+    use crate::{chain::{Chain, ChainLimit}, keeper::Keeper, utils::faker_data_chains_vector};
 
     use super::tools;
 
@@ -131,6 +131,29 @@ mod tests {
         assert!(validity.is_ok());
     }
 
+    #[test]
+    fn test_faker_data_chains_vector () {
+        let result = faker_data_chains_vector(1000, 100, 10000);
+        assert_eq!(result.is_ok(), true);
+        let data_chains = result.unwrap();
+
+        data_chains.iter().for_each(
+            |chain| 
+            {
+                let origin = chain.origin().unwrap();
+                let max_len = chain.limit().max_len();
+                let gap = chain.limit().time_gap();
+                println!("len: {}, origin:{}, max_len: {}, time_gap: {}", 
+                    chain.len(), 
+                    origin, 
+                    max_len, 
+                    gap
+                );
+            }
+        );
+    
+    }
+
     #[tokio::test]
     async fn test_faker_executor() {
         let executor = 
@@ -140,13 +163,6 @@ mod tests {
         assert_eq!(main_ref.len(), 7);
     }
 
-    #[test]
-    fn test_faker_data_chains_vector() {
-        let result = 
-            tools::faker_data_chains_vector(10, 20, 200);
-        assert_eq!(result.is_ok(), true);
-        let data_chains = result.unwrap();
-        assert_eq!(data_chains.len(), 10);
-    }
+    
 }
 
