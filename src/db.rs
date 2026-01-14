@@ -495,7 +495,7 @@ impl <B> Bundle <B>
         Ok(size)
     }
 
-    
+
     ///this function will take the ownership of the bundle, and return the 
     /// onwership of it back.
     async fn encode_to_stream<R> (
@@ -746,6 +746,8 @@ mod tests {
         }
     }
 
+    
+
     use crate::utils::faker_data_chain;
     #[tokio::test(flavor = "multi_thread")]
     async fn test_bundle_save_and_load() {
@@ -782,6 +784,19 @@ mod tests {
     
         assert_eq!(chains.len(), vec_ret.len());
         assert_eq!(chains, vec_ret);
+
+        //------------------test save_chains_to_bundle----------------------------
+        let result = bundle.save_chains_to_bundle(&chains).await;
+        assert_eq!(result.is_ok(), true);
+
+        //load the chains from the bundle file.
+        //bacasue of we save the chains twice, so we should get 20 chains from the bundle file.   
+        let result = bundle.load_chains_from_bundle().await;
+        assert_eq!(result.is_ok(), true);
+        let vec_ret = result.unwrap();
+        
+        
+
 
         //remove the test file
         let _ = tokio::fs::remove_file(bundle.path).await;

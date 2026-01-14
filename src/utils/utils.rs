@@ -3,6 +3,7 @@
 pub(crate) mod tools {
     use std::sync::Arc;
 
+    use rand::{Rng, random};
     use tokio::sync::RwLock;
 
     use crate::executor::{ChainExecutor, Executor};
@@ -38,6 +39,37 @@ pub(crate) mod tools {
             chain.add(block)?;
         }
         Ok(chain)
+    }
+
+    ///create a vector with faker chains, each chain has a random length range from 
+    /// (1/2, 1 ) * max_len, time_gap too.
+    /// the "chain_max_len" and "max_time_gap" should be more grater than 2.
+    /// or we may get a trivial chain which only has a genesis block, or a error.
+    /// # Arguments
+    /// * `chain_max_len` - the max_len of each chain should be less than this.
+    /// * `num` - the number of chains in the vector.
+    /// * `time_gap` - the time_gap of each chain, should be less than this one.
+    pub fn faker_data_chains_vector(
+        num: usize, 
+        chain_max_len: usize, 
+        max_time_gap: u64
+    )   -> Result<Vec<BlockChain<DataBlock>>, HError>
+    {
+        let mut vec_ret = Vec::<BlockChain<DataBlock>>::new();
+        let mut rng = rand::thread_rng();
+        for i in 0.. num {
+            //generate random  number
+            let random_len_rate = rng.gen_range(50..100);
+            let random_time_gap_rate = rng.gen_range(50..100);
+            let random_max_len = random_len_rate * chain_max_len / 100;
+            let random_time_gap = random_time_gap_rate * max_time_gap / 100;
+
+            let chain = 
+                faker_data_chain(random_max_len, i as u32, random_time_gap)?;
+            vec_ret.push(chain);
+        }
+        Ok(vec_ret)
+
     }
     
     ///     the main chain's maximal length is limited by the limit.max_len(), too.
@@ -101,10 +133,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_faker_executor() {
-        let executor = tools::faker_executor(7, ChainLimit::new(10, 1)).await.unwrap();
+        let executor = 
+            tools::faker_executor(7, ChainLimit::new(10, 1)).await.unwrap();
         let keeper = executor.keeper.read().await;
         let main_ref = keeper.main_ref();
         assert_eq!(main_ref.len(), 7);
+    }
+
+    #[test]
+    fn test_faker_data_chains_vector() {
+        let result = 
+            tools::faker_data_chains_vector(10, 20, 200);
+        assert_eq!(result.is_ok(), true);
+        let data_chains = result.unwrap();
+        assert_eq!(data_chains.len(), 10);
     }
 }
 
