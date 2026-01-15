@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use crate::herrors::HError;
 use crate::hash:: {HashValue, Hasher};
 use crate::network::udp::UdpConnection;
-use crate::network::protocol::{MessageHandler, Message};
 
 
 #[async_trait]

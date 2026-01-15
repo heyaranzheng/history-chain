@@ -33,7 +33,8 @@ impl <B, D> NormalNode <B, D>
     where B: Block + Carrier,
           D: Block + Digester
 {
-    pub fn new(name: NodeName, capacity: usize) -> Self {
+    ///create a new node with given name and capacity of friends list
+    fn new(name: NodeName, capacity: usize) -> Self {
         Self {
             name,
             address: None,
