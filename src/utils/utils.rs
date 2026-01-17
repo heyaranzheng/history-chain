@@ -1,10 +1,11 @@
  
 #[cfg(test)]
 pub(crate) mod tools {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use rand::{Rng, random};
-    use tokio::sync::RwLock;
+    use tokio::sync::{Mutex, RwLock};
 
     use crate::executor::{ChainExecutor, Executor};
     use crate::hash::{HashValue, Hasher};
@@ -13,6 +14,30 @@ pub(crate) mod tools {
     use crate::herrors::HError;
     use crate::keeper::ChainKeeper;
     use crate::uuidbytes::{UuidBytes, Init};
+    use crate::nodes::{Node, SignHandle, NodeInfo, NodeAppend};
+    use crate::network::{AsyncHandler, AsyncPayloadHandler, AsyncRegister, UdpConnection};
+
+    pub struct FakerNomalNode {
+        nodeinfo: NodeInfo,
+        sign_handle: SignHandle,
+        friends: HashMap<HashValue, NodeInfo>, 
+        async_payload_handler: AsyncPayloadHandler,
+    }
+    impl UdpConnection for FakerNomalNode {
+    }
+
+    impl NodeAppend for FakerNomalNode {
+        fn async_payload_handler(&self) -> Result<AsyncPayloadHandler,HError> {
+            Ok(self.async_payload_handler.clone())
+        }
+    }
+
+    impl Node for FakerNomalNode {
+    }
+
+    pub async fn faker_node() -> Node {
+
+    }
 
     pub fn faker_data_chain(len: usize, digest_id: u32, time_gap: u64) -> 
         Result<BlockChain<DataBlock>, HError> 

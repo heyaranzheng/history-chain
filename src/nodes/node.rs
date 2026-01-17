@@ -55,6 +55,7 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
+    ///create a new empty nodeinfo, set all NONE value
     pub fn new() -> Self {
         NodeInfo {
             name: None,

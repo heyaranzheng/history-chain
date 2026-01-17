@@ -1,76 +1,63 @@
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
-use crate::nodes::Identity;
+use crate::nodes::{Identity, NodeInfo};
 use crate::pipe::Pipe;
-use crate::network::Message;
+use crate::network::{Message, Payload, PayloadTypes};
 use crate::herrors::HError;
+use crate::req_resp::{RequestWorker, Response, Request};
+use crate::network::register::{AsyncHandler, AsyncRegister};
 
-
-///a handler for network messages.
-#[async_trait]
-trait Handler
-{
-    fn handle_block_recitify(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
-    fn handle_chain_request(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
-    fn handle_vote_block(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
-    fn handle_search_friend(&self, identity: &mut Identity, msg: Message) -> Result<(), HError>;
-    
-    
-    //--------------
-    //async fn handle_introduce(&self, identity: &mut Identity, msg: Message) {}
+/// AysncPayloadHandler is a struct that contains AsyncRegister.
+pub struct AysncPayloadHandler<'context>{
+    rigister: AsyncRegister,    
 }
 
-
-pub struct MessageHandler  {
-    //this is a pipe to this node's chain keeper.
-    pipe: Pipe<Message>,
-}
 
 #[async_trait]
-impl Handler for MessageHandler {
-   
-    fn handle_block_recitify(&self, identity: &mut Identity, msg: Message) 
-        -> Result<(), HError> 
-    {
-        //TO DO
-        Ok(())
+impl AsyncHandler for AysncPayloadHandler{
+    async fn handle(
+        &self,
+        payload: Payload,
+    ) -> Result<Payload, HError> {
+        let payload_ret = self.rigister.handle(payload).await?;
+        Ok(payload_ret)        
     }
-    fn handle_chain_request(&self, identity: &mut Identity, msg: Message) 
-        -> Result<(), HError> 
+
+    async fn reg_async<F, Fut>(
+        &mut self,
+        payload_type: PayloadTypes,
+        async_handler: F,
+    ) -> Result<(), HError>
+        where F: Fn(Payload) -> Fut + Send + Sync + 'static,
+              Fut: Future<Output = Result<Payload, HError>> + Send + 'static 
     {
-        //TO DO
-        Ok(())
+
     }
- 
-    
-    fn handle_vote_block(&self, identity: &mut Identity, msg: Message) 
-        -> Result<(), HError> 
-    {
-        //TO DO
-        Ok(())
-    }
-    fn handle_search_friend(&self, identity: &mut Identity, msg: Message) 
-        -> Result<(), HError> 
-    {
-        //TO DO
-        Ok(())
-    }
-    
+
 }
 
 
-impl MessageHandler {
-    pub fn new(pipe_to_chain_keeper: Pipe<Message>)
-        -> Self {
-        Self {
-            pipe: pipe_to_chain_keeper,
-        }
-    }
-    async fn handle_message(&self, identity: &mut Identity, msg: Message) 
-        -> Result<(), HError> { 
-            //TO DO
-            Ok(())
-    }
 
+#[cfg(test)]
+mod tests{
+    use super::*;
+    use tokio_util::sync::CancellationToken;
+    use crate::network::register::*;
+    use crate::{nodes::*};
+    use crate::herrors::HError;
+    
+
+    #[tokio::test]
+    async fn test_handler_context() {
+        let nodeinfo = NodeInfo ::new();
+        let cancel_token = CancellationToken::new();
+
+        
+
+
+    }
+    
 }
